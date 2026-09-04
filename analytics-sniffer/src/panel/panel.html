@@ -1,0 +1,566 @@
+<html lang="it" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Analytics Sniffer</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     TOOLBAR
+     Tutti i controlli vivono QUI: nessun elemento viene mai iniettato nella
+     pagina ispezionata. Le icone opzionali sono hidden di default e mostrate
+     solo se la relativa funzione è attiva nei Settings — un solo flag per
+     funzione, senza doppio controllo.
+     ═══════════════════════════════════════════════════════════════════════ -->
+<header class="uad-toolbar" id="toolbar">
+
+  <div class="uad-toolbar__group uad-toolbar__group--primary">
+    <button type="button" class="uad-btn" id="btn-refresh"
+            title="Ricarica la pagina ispezionata — NON cancella i dati raccolti">
+      <span class="uad-btn__icon" aria-hidden="true">⟳</span>
+      <span class="uad-btn__label">Refresh</span>
+    </button>
+
+    <button type="button" class="uad-btn" id="btn-clear"
+            title="Svuota i dati raccolti — NON ricarica la pagina">
+      <span class="uad-btn__icon" aria-hidden="true">⌫</span>
+      <span class="uad-btn__label">Clear</span>
+    </button>
+
+    <button type="button" class="uad-btn" id="btn-collapse"
+            title="Chiudi tutti gli accordion">
+      <span class="uad-btn__icon" aria-hidden="true">⇱</span>
+      <span class="uad-btn__label">Collassa</span>
+    </button>
+
+    <button type="button" class="uad-btn" id="btn-export"
+            title="Scarica i dati raccolti come JSON">
+      <span class="uad-btn__icon" aria-hidden="true">↓</span>
+      <span class="uad-btn__label">Export</span>
+    </button>
+  </div>
+
+  <div class="uad-toolbar__group uad-toolbar__group--search">
+    <div class="uad-search" id="search-wrap">
+      <span class="uad-search__icon" aria-hidden="true">⌕</span>
+      <input type="search" class="uad-search__input" id="search-input"
+             placeholder="Cerca in chiavi, valori, nomi evento, canale…"
+             autocomplete="off" spellcheck="false"
+             aria-label="Cerca negli eventi">
+      <span class="uad-search__count" id="search-count" hidden>0/0</span>
+      <button type="button" class="uad-search__nav" id="search-prev"
+              title="Risultato precedente (Shift+Invio)" aria-label="Precedente" hidden>↑</button>
+      <button type="button" class="uad-search__nav" id="search-next"
+              title="Risultato successivo (Invio)" aria-label="Successivo" hidden>↓</button>
+      <button type="button" class="uad-search__clear" id="search-clear"
+              title="Azzera la ricerca e ripristina lo stato precedente degli accordion"
+              aria-label="Azzera ricerca" hidden>✕</button>
+    </div>
+
+    <button type="button" class="uad-btn uad-btn--toggle" id="btn-filters"
+            aria-expanded="false" aria-controls="filters-panel"
+            title="Filtri avanzati">
+      <span class="uad-btn__icon" aria-hidden="true">⚗</span>
+      <span class="uad-btn__label">Filtri</span>
+      <span class="uad-badge uad-badge--count" id="filters-count" hidden>0</span>
+    </button>
+  </div>
+
+  <div class="uad-toolbar__group uad-toolbar__group--optional">
+    <button type="button" class="uad-btn uad-btn--icon" id="btn-stopnav"
+            aria-pressed="false"
+            title="Blocca i redirect della pagina ispezionata" hidden>
+      <span class="uad-btn__icon" aria-hidden="true">⛔</span>
+      <span class="uad-btn__label">Stop nav</span>
+      <span class="uad-dot" id="stopnav-dot" hidden aria-hidden="true"></span>
+    </button>
+
+    <button type="button" class="uad-btn uad-btn--icon" id="btn-cookies"
+            aria-expanded="false" aria-controls="cookies-drawer"
+            title="Cookie del dominio ispezionato: ispeziona e cancella" hidden>
+      <span class="uad-btn__icon" aria-hidden="true">🍪</span>
+      <span class="uad-btn__label">Cookie</span>
+    </button>
+
+    <button type="button" class="uad-btn uad-btn--icon uad-btn--toggle" id="btn-showall"
+            aria-pressed="false"
+            title="Mostra anche i parametri inviati senza valore">
+      <span class="uad-btn__icon" aria-hidden="true">◍</span>
+      <span class="uad-btn__label">Campi vuoti</span>
+    </button>
+
+    <button type="button" class="uad-btn uad-btn--icon" id="btn-theme"
+            title="Tema chiaro / scuro / automatico" aria-label="Cambia tema">
+      <span class="uad-btn__icon" id="theme-icon" aria-hidden="true">◐</span>
+    </button>
+
+    <button type="button" class="uad-btn uad-btn--icon" id="btn-settings"
+            aria-expanded="false" aria-controls="settings-drawer"
+            title="Impostazioni">
+      <span class="uad-btn__icon" aria-hidden="true">⚙</span>
+    </button>
+  </div>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     FILTRI AVANZATI
+     Righe di condizioni; dalla seconda in poi compare il chip AND/OR.
+     Valutazione da sinistra a destra, senza precedenza implicita.
+     ═══════════════════════════════════════════════════════════════════════ -->
+<section class="uad-filters" id="filters-panel" hidden aria-label="Filtri avanzati">
+  <div class="uad-filters__rows" id="filters-rows"></div>
+  <div class="uad-filters__actions">
+    <button type="button" class="uad-btn uad-btn--ghost" id="btn-filter-add">
+      + Aggiungi condizione
+    </button>
+    <button type="button" class="uad-btn uad-btn--ghost" id="btn-filter-reset">
+      Azzera filtri
+    </button>
+  </div>
+</section>
+
+<template id="tpl-filter-row">
+  <div class="uad-filter-row" data-row>
+    <button type="button" class="uad-chip uad-chip--logic" data-logic="AND"
+            title="Clicca per cambiare operatore logico">AND</button>
+    <select class="uad-select" data-field aria-label="Campo"></select>
+    <select class="uad-select" data-operator aria-label="Operatore"></select>
+    <input type="text" class="uad-input" data-value placeholder="valore…"
+           autocomplete="off" spellcheck="false" aria-label="Valore">
+    <button type="button" class="uad-icon-btn" data-remove
+            title="Rimuovi condizione" aria-label="Rimuovi">✕</button>
+  </div>
+</template>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     TAB DINAMICHE
+     Con rilevamento automatico attivo, una tab per ogni tool che produce
+     eventi. Con rilevamento manuale, solo i tool spuntati nei Settings.
+     ═══════════════════════════════════════════════════════════════════════ -->
+<nav class="uad-tabs" id="tabs" role="tablist" aria-label="Tool rilevati"></nav>
+
+<template id="tpl-tab">
+  <button type="button" class="uad-tab" role="tab" aria-selected="false"
+          data-tool-id data-color>
+    <span class="uad-tab__dot" aria-hidden="true"></span>
+    <span class="uad-tab__label"></span>
+    <span class="uad-badge uad-tab__count">0</span>
+    <span class="uad-badge uad-badge--live" data-live hidden
+          title="nuovi eventi in questa tab">●</span>
+  </button>
+</template>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     CORPO
+     ═══════════════════════════════════════════════════════════════════════ -->
+<main class="uad-main" id="main">
+
+  <div class="uad-empty" id="empty-no-tools">
+    <p class="uad-empty__title">Nessun tool di analytics rilevato</p>
+    <p class="uad-empty__text">
+      Ricarica la pagina con il pannello aperto: i content script si iniettano
+      solo al caricamento del documento. Se il sito usa un tool che non compare,
+      verifica che sia attivo in
+      <button type="button" class="uad-link" id="link-settings-1">Impostazioni</button>.
+    </p>
+    <p class="uad-empty__hint" id="empty-diagnostics"></p>
+  </div>
+
+  <div class="uad-empty" id="empty-no-events" hidden>
+    <p class="uad-empty__title">In attesa di eventi</p>
+    <p class="uad-empty__text">
+      I tool sono stati rilevati. Ricarica la pagina o interagisci con il sito
+      per vedere le prime chiamate.
+    </p>
+  </div>
+
+  <div class="uad-empty" id="empty-no-match" hidden>
+    <p class="uad-empty__title">Nessun risultato</p>
+    <p class="uad-empty__text">Nessun evento corrisponde a ricerca o filtri attivi.</p>
+    <button type="button" class="uad-btn uad-btn--ghost" id="btn-reset-search">
+      Azzera ricerca e filtri
+    </button>
+  </div>
+
+  <div class="uad-panes" id="panes" role="tabpanel"></div>
+</main>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     TEMPLATE ACCORDION
+     Macro  = view di pagina (raggruppata per viewId, NON per URL)
+     Micro  = singolo evento
+     Gruppo = categoria di campi, ordinate COSA → COME, con stato iniziale
+              configurabile nei Settings
+     ═══════════════════════════════════════════════════════════════════════ -->
+
+<template id="tpl-view">
+  <section class="uad-view" data-view-id>
+    <button type="button" class="uad-view__head" aria-expanded="true">
+      <span class="uad-view__caret" aria-hidden="true">▸</span>
+      <span class="uad-view__url" data-url></span>
+      <span class="uad-badge uad-view__spa" data-spa hidden
+            title="Navigazione SPA: nessun ricaricamento di pagina">SPA</span>
+      <span class="uad-badge uad-view__count" data-count>0</span>
+      <span class="uad-view__time" data-time></span>
+    </button>
+    <div class="uad-view__body" data-body></div>
+  </section>
+</template>
+
+<template id="tpl-event">
+  <article class="uad-event" data-event-id data-seq>
+    <button type="button" class="uad-event__head" aria-expanded="false">
+      <span class="uad-event__caret" aria-hidden="true">▸</span>
+      <span class="uad-tag uad-event__tool" data-tool></span>
+      <span class="uad-event__name" data-name></span>
+      <span class="uad-badge uad-event__status" data-status hidden></span>
+      <span class="uad-badge uad-event__source" data-source
+            title="Canale su cui l'evento è stato osservato"></span>
+      <span class="uad-badge uad-event__delta" data-delta
+            title="Tempo dall'evento precedente"></span>
+      <span class="uad-event__clock" data-clock></span>
+      <button type="button" class="uad-icon-btn uad-event__devref" data-devref hidden
+              title="Copia URL e timestamp per cercarli nel tab Network">⧉</button>
+    </button>
+    <div class="uad-event__body" data-body>
+      <p class="uad-event__warning" data-warning hidden></p>
+      <div class="uad-event__groups" data-groups></div>
+      <div class="uad-event__products" data-products hidden></div>
+      <details class="uad-event__raw" data-raw hidden>
+        <summary>Payload grezzo</summary>
+        <pre data-raw-content></pre>
+      </details>
+    </div>
+  </article>
+</template>
+
+<template id="tpl-group">
+  <div class="uad-group" data-category>
+    <button type="button" class="uad-group__head" aria-expanded="true">
+      <span class="uad-group__caret" aria-hidden="true">▸</span>
+      <span class="uad-group__name" data-name></span>
+      <span class="uad-badge uad-group__count" data-count>0</span>
+    </button>
+    <div class="uad-group__body" data-body>
+      <span class="uad-group__guide" aria-hidden="true"></span>
+      <div class="uad-group__rows" data-rows></div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-row">
+  <div class="uad-row" data-key-name>
+    <span class="uad-row__key" data-key></span>
+    <button type="button" class="uad-row__info" data-info hidden
+            title="" aria-label="Variabile sorgente">ℹ</button>
+    <span class="uad-row__link" data-crosscheck hidden title=""></span>
+    <span class="uad-row__value" data-value tabindex="0"
+          title="Clicca per copiare"></span>
+  </div>
+</template>
+
+<template id="tpl-product">
+  <div class="uad-product" data-index>
+    <div class="uad-product__head">
+      <span class="uad-product__idx" data-idx></span>
+      <span class="uad-product__name" data-name></span>
+    </div>
+    <div class="uad-product__rows" data-rows></div>
+  </div>
+</template>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SETTINGS DRAWER
+     ═══════════════════════════════════════════════════════════════════════ -->
+<aside class="uad-drawer" id="settings-drawer" hidden aria-label="Impostazioni">
+  <header class="uad-drawer__head">
+    <h2 class="uad-drawer__title">Impostazioni</h2>
+    <button type="button" class="uad-icon-btn" id="settings-close"
+            title="Chiudi" aria-label="Chiudi impostazioni">✕</button>
+  </header>
+
+  <div class="uad-drawer__body">
+
+    <!-- ── TOOL ─────────────────────────────────────────────────────────── -->
+    <section class="uad-section">
+      <h3 class="uad-section__title">Tool da monitorare</h3>
+
+      <label class="uad-switch">
+        <input type="checkbox" id="opt-autoListener" checked>
+        <span class="uad-switch__label">Rilevamento automatico</span>
+        <span class="uad-switch__note">
+          Attivo: i tool rilevati sulla pagina compaiono da soli come tab.
+          Disattivo: compaiono solo quelli spuntati qui sotto — utile per
+          nascondere un tool che non ti interessa
+        </span>
+      </label>
+
+      <p class="uad-section__hint">
+        Solo i tool attivi vengono intercettati: quelli disattivati non
+        agganciano nemmeno un hook. L'ordine di questa lista determina l'ordine
+        delle tab — trascina per riordinare.
+      </p>
+      <ul class="uad-tool-list" id="settings-tools"></ul>
+    </section>
+
+    <!-- ── SEZIONI DEI CAMPI ────────────────────────────────────────────── -->
+    <section class="uad-section">
+      <h3 class="uad-section__title">Sezioni dei campi</h3>
+      <p class="uad-section__hint">
+        Stato iniziale di ogni sezione dentro un evento. Spuntata = si apre
+        automaticamente. La tua scelta manuale su un singolo evento vince
+        comunque su questo default.
+      </p>
+      <div class="uad-catlist" id="settings-categories"></div>
+      <div class="uad-section__actions">
+        <button type="button" class="uad-btn uad-btn--ghost" id="btn-cat-all">Apri tutte</button>
+        <button type="button" class="uad-btn uad-btn--ghost" id="btn-cat-none">Chiudi tutte</button>
+        <button type="button" class="uad-btn uad-btn--ghost" id="btn-cat-reset">Default</button>
+      </div>
+    </section>
+
+    <!-- ── FUNZIONI AGGIUNTIVE ──────────────────────────────────────────── -->
+    <section class="uad-section">
+      <h3 class="uad-section__title">Funzioni aggiuntive</h3>
+      <p class="uad-section__hint">
+        Ogni funzione controlla anche la propria icona in barra: attivarla la
+        mostra, disattivarla la nasconde.
+      </p>
+
+      <label class="uad-switch">
+        <input type="checkbox" id="feat-cookieInspector" data-feature="cookieInspector">
+        <span class="uad-switch__label">🍪 Cookie inspector</span>
+        <span class="uad-switch__note">
+          Ispeziona e cancella i cookie del dominio, inclusi gli <code>HttpOnly</code>
+          invisibili a JavaScript. Decodifica <code>cid</code>, sessione ed ECID.
+          Include il clear a tre livelli · permesso <code>cookies</code>
+        </span>
+      </label>
+
+      <label class="uad-switch">
+        <input type="checkbox" id="feat-cookieCrossCheck" data-feature="cookieCrossCheck">
+        <span class="uad-switch__label">🔗 Cross-check cookie ↔ hit</span>
+        <span class="uad-switch__note">
+          Aggiunge un'icona accanto a <code>client ID</code>, sessione ed ECID
+          nelle righe degli eventi: 🔗 se corrisponde al cookie, ⚠️ se differisce
+          — sintomo di identity split o di due property sullo stesso sito
+        </span>
+      </label>
+
+      <label class="uad-switch">
+        <input type="checkbox" id="feat-stopNavigation" data-feature="stopNavigation">
+        <span class="uad-switch__label">⛔ Stop navigazione</span>
+        <span class="uad-switch__note">
+          Blocca i redirect della pagina, per cliccare una CTA senza perdere il
+          contesto raccolto. Il solo blocco JavaScript non basta:
+          <code>location.href</code> non è intercettabile
+        </span>
+      </label>
+
+      <label class="uad-switch">
+        <input type="checkbox" id="feat-devReferences" data-feature="devReferences">
+        <span class="uad-switch__label">⧉ Dev references</span>
+        <span class="uad-switch__note">
+          Aggiunge un'icona su ogni evento che copia URL e timestamp, per la
+          ricerca manuale nel tab Network. Non esiste un'API per saltare
+          automaticamente a una riga: è un aiuto, non un'automazione
+        </span>
+      </label>
+    </section>
+
+    <!-- ── ADOBE ────────────────────────────────────────────────────────── -->
+    <section class="uad-section" id="section-adobe">
+      <h3 class="uad-section__title">Adobe — euristiche</h3>
+      <p class="uad-section__hint">
+        Tecniche non documentate da Adobe, utili su implementazioni con Launch.
+        Best-effort: su alcune installazioni non trovano nulla, e un risultato
+        assente non è un bug.
+      </p>
+
+      <label class="uad-switch">
+        <input type="checkbox" id="feat-aggressiveHeuristics" data-feature="aggressiveHeuristics">
+        <span class="uad-switch__label">Polling sui data element</span>
+        <span class="uad-switch__note">
+          Legge l'XDM da <code>_satellite.getVar()</code> quando l'istanza Alloy
+          non è esposta come variabile globale. Serve sulle implementazioni dove
+          il Web SDK è interamente dentro Launch
+        </span>
+      </label>
+
+      <label class="uad-switch">
+        <input type="checkbox" id="feat-adobeMapper" data-feature="adobeMapper">
+        <span class="uad-switch__label">Mapper eVar → nome umano (EDDL)</span>
+        <span class="uad-switch__note">
+          Alcune implementazioni tengono in un data element la traduzione
+          <code>eVar1 → page.pageInfo.site_code</code>. Se la trova, mostra il
+          nome leggibile nel tooltip ℹ️ e lo rende cercabile: su 200 eVar fa
+          la differenza
+        </span>
+      </label>
+    </section>
+
+    <!-- ── AVANZATE ─────────────────────────────────────────────────────── -->
+    <section class="uad-section">
+      <h3 class="uad-section__title">Avanzate</h3>
+
+      <label class="uad-field">
+        <span class="uad-field__label">Eventi massimi per tab</span>
+        <input type="number" id="limit-maxEvents" min="100" max="20000" step="100" value="2000">
+        <span class="uad-field__note">
+          Oltre questa soglia i più vecchi vengono scartati, dichiarandolo
+          nell'export
+        </span>
+      </label>
+
+      <label class="uad-switch">
+        <input type="checkbox" id="opt-collapseByDefault">
+        <span class="uad-switch__label">Eventi chiusi all'arrivo</span>
+        <span class="uad-switch__note">
+          Anche le sezioni di pagina nascono chiuse: utile su siti molto
+          chiacchieroni
+        </span>
+      </label>
+
+      <label class="uad-switch">
+        <input type="checkbox" id="opt-debug">
+        <span class="uad-switch__label">Log verboso in console</span>
+        <span class="uad-switch__note">Scrive nella console della pagina ispezionata</span>
+      </label>
+
+      <div class="uad-section__actions">
+        <button type="button" class="uad-btn uad-btn--ghost" id="btn-diagnose"
+                aria-expanded="false" aria-controls="diagnostics-output">
+          Diagnostica
+        </button>
+        <button type="button" class="uad-btn uad-btn--ghost" id="btn-settings-reset">
+          Ripristina default
+        </button>
+      </div>
+      <pre class="uad-diagnostics" id="diagnostics-output" hidden></pre>
+    </section>
+
+    <!-- ── CREDIT ───────────────────────────────────────────────────────── -->
+    <footer class="uad-credit">
+      <span class="uad-credit__info" tabindex="0"
+            aria-label="Informazioni sull'estensione">
+        <span class="uad-credit__icon" aria-hidden="true">ⓘ</span>
+        <span class="uad-credit__tip" role="tooltip">
+          vibe-coded with love by @francesco.lorenzatti
+        </span>
+      </span>
+      <span class="uad-credit__version">Analytics Sniffer 0.2.0</span>
+    </footer>
+  </div>
+</aside>
+
+<template id="tpl-tool-item">
+  <li class="uad-tool-item" draggable="true" data-tool-id>
+    <span class="uad-tool-item__grip" aria-hidden="true"
+          title="Trascina per riordinare le tab">⋮⋮</span>
+    <label class="uad-switch uad-switch--inline">
+      <input type="checkbox" data-tool-toggle>
+      <span class="uad-switch__label" data-tool-label></span>
+    </label>
+    <span class="uad-badge" data-tool-state hidden></span>
+  </li>
+</template>
+
+<template id="tpl-cat-item">
+  <label class="uad-cat-item">
+    <input type="checkbox" data-cat-toggle>
+    <span class="uad-cat-item__name" data-cat-name></span>
+  </label>
+</template>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     COOKIE DRAWER
+     ═══════════════════════════════════════════════════════════════════════ -->
+<aside class="uad-drawer" id="cookies-drawer" hidden aria-label="Cookie">
+  <header class="uad-drawer__head">
+    <h2 class="uad-drawer__title">Cookie</h2>
+    <span class="uad-drawer__subtitle" id="cookies-domain"></span>
+    <button type="button" class="uad-icon-btn" id="cookies-close"
+            title="Chiudi" aria-label="Chiudi cookie">✕</button>
+  </header>
+
+  <div class="uad-drawer__toolbar">
+    <div class="uad-segmented" role="group" aria-label="Filtro cookie">
+      <button type="button" class="uad-segmented__btn is-active"
+              data-cookie-filter="analytics">Analytics</button>
+      <button type="button" class="uad-segmented__btn"
+              data-cookie-filter="all">Tutti</button>
+    </div>
+    <button type="button" class="uad-btn uad-btn--ghost" id="cookies-refresh"
+            title="Rileggi i cookie">⟳</button>
+  </div>
+
+  <div class="uad-drawer__body">
+    <div class="uad-cookie-list" id="cookies-list"></div>
+  </div>
+
+  <footer class="uad-drawer__foot">
+    <div class="uad-segmented" role="group" aria-label="Livello di cancellazione">
+      <button type="button" class="uad-segmented__btn is-active" data-clear-mode="analytics"
+              title="Solo i cookie di analytics noti: non tocca il login">Analytics</button>
+      <button type="button" class="uad-segmented__btn" data-clear-mode="storage"
+              title="Cookie analytics + localStorage: necessario per resettare l'identity Adobe, che altrimenti si rigenera identica">
+        + storage
+      </button>
+      <button type="button" class="uad-segmented__btn uad-segmented__btn--danger" data-clear-mode="all"
+              title="Tutti i cookie del dominio: ti disconnette dal sito">Tutti</button>
+    </div>
+    <label class="uad-switch uad-switch--inline">
+      <input type="checkbox" id="cookies-reload" checked>
+      <span class="uad-switch__label">e ricarica</span>
+    </label>
+    <button type="button" class="uad-btn uad-btn--primary" id="cookies-clear">Cancella</button>
+  </footer>
+</aside>
+
+<template id="tpl-cookie">
+  <div class="uad-cookie" data-name>
+    <div class="uad-cookie__main">
+      <span class="uad-cookie__name" data-cookie-name></span>
+      <span class="uad-cookie__value" data-cookie-value tabindex="0"
+            title="Clicca per copiare"></span>
+    </div>
+    <div class="uad-cookie__meta">
+      <span class="uad-tag" data-cookie-domain></span>
+      <span class="uad-tag" data-cookie-expires></span>
+      <span class="uad-tag uad-tag--flag" data-flag-httponly hidden>HttpOnly</span>
+      <span class="uad-tag uad-tag--flag" data-flag-secure hidden>Secure</span>
+      <span class="uad-tag uad-tag--flag" data-flag-samesite hidden></span>
+      <span class="uad-tag uad-tag--flag" data-flag-partitioned hidden
+            title="Cookie partizionato (CHIPS): richiede partitionKey per la rimozione">
+        Partitioned
+      </span>
+    </div>
+    <button type="button" class="uad-icon-btn uad-cookie__del" data-cookie-delete
+            title="Cancella questo cookie" aria-label="Cancella cookie">✕</button>
+  </div>
+</template>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     ELEMENTI FLOTTANTI
+     ═══════════════════════════════════════════════════════════════════════ -->
+
+<!-- Badge nuovi match: non si scrolla MAI automaticamente durante la lettura;
+     il salto avviene solo su clic esplicito. -->
+<button type="button" class="uad-newmatch" id="new-match" hidden>
+  <span class="uad-newmatch__dot" aria-hidden="true">●</span>
+  <span id="new-match-text">0 nuovi match</span>
+</button>
+
+<div class="uad-toast" id="toast" hidden role="status" aria-live="polite"></div>
+
+<div class="uad-banner" id="banner" hidden role="alert">
+  <span class="uad-banner__text" id="banner-text"></span>
+  <button type="button" class="uad-banner__action" id="banner-action" hidden></button>
+  <button type="button" class="uad-icon-btn" id="banner-close" aria-label="Chiudi">✕</button>
+</div>
+
+<script type="module" src="panel.js"></script>
+</body>
+</html>

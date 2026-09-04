@@ -1,0 +1,24 @@
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <title>Universal Analytics Debugger — devtools page</title>
+</head>
+<body>
+  <!--
+    ═══════════════════════════════════════════════════════════════════════
+    PAGINA INVISIBILE — non viene mai mostrata all'utente.
+
+    Esiste solo per ospitare devtools.js, che registra il pannello
+    "Analytics" nella barra di DevTools tramite
+    chrome.devtools.panels.create().
+
+    Non serve alcun contenuto nel body: nessun markup viene renderizzato.
+
+    Il ciclo di vita di questo documento coincide con quello della finestra
+    DevTools: viene creato all'apertura, distrutto alla chiusura, e
+    sopravvive ai reload della pagina ispezionata.
+    ═══════════════════════════════════════════════════════════════════════
+  -->
+  <script src="devtools.js"></script>
+</body>
+</html>

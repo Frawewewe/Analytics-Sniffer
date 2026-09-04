@@ -1,0 +1,193 @@
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Universal Analytics Debugger — permessi</title>
+  <style>
+    /* ═══════════════════════════════════════════════════════════════════════
+       Stile inline: questa finestra deve funzionare anche prima che panel.css
+       esista, ed e' un documento isolato di 300px. Un file CSS separato per
+       cinque elementi sarebbe una dipendenza inutile.
+       ═══════════════════════════════════════════════════════════════════════ */
+    :root {
+      --bg: #ffffff;
+      --fg: #1f2328;
+      --fg-dim: #6b7280;
+      --border: #e5e7eb;
+      --accent: #8b5cf6;
+      --accent-fg: #ffffff;
+      --ok: #16a34a;
+      --warn: #b45309;
+      --err: #dc2626;
+      --radius: 8px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1c1c1e;
+        --fg: #e8e8ea;
+        --fg-dim: #9a9aa0;
+        --border: #35353a;
+        --accent: #a78bfa;
+        --accent-fg: #1c1c1e;
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--fg);
+      font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      padding: 18px 20px;
+      gap: 14px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 650;
+      letter-spacing: -0.01em;
+    }
+
+    p { margin: 0; }
+
+    .desc { color: var(--fg-dim); }
+
+    .perms {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .perms li {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: color-mix(in srgb, var(--fg) 3%, transparent);
+    }
+
+    .perms code {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+      font-size: 11.5px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: color-mix(in srgb, var(--fg) 8%, transparent);
+      white-space: nowrap;
+    }
+
+    .perms .why {
+      color: var(--fg-dim);
+      font-size: 12px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      margin-top: auto;
+    }
+
+    button {
+      flex: 1;
+      padding: 9px 14px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--fg);
+      font: inherit;
+      font-weight: 550;
+      cursor: pointer;
+      transition: background .12s ease, border-color .12s ease;
+    }
+    button:hover  { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+    button:active { transform: translateY(0.5px); }
+    button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-fg);
+    }
+    button.primary:hover {
+      background: color-mix(in srgb, var(--accent) 88%, black);
+    }
+
+    button[disabled] {
+      opacity: .5;
+      cursor: default;
+      pointer-events: none;
+    }
+
+    .status {
+      display: none;
+      padding: 9px 11px;
+      border-radius: var(--radius);
+      font-size: 12.5px;
+    }
+    .status[data-kind="ok"]   { display: block; background: color-mix(in srgb, var(--ok) 12%, transparent);   color: var(--ok); }
+    .status[data-kind="warn"] { display: block; background: color-mix(in srgb, var(--warn) 12%, transparent); color: var(--warn); }
+    .status[data-kind="err"]  { display: block; background: color-mix(in srgb, var(--err) 12%, transparent);  color: var(--err); }
+
+    .hint {
+      font-size: 11.5px;
+      color: var(--fg-dim);
+    }
+  </style>
+</head>
+<body>
+
+  <!--
+    ═══════════════════════════════════════════════════════════════════════════
+    PERCHE QUESTA FINESTRA ESISTE
+
+    chrome.permissions.request() richiede un user gesture in un contesto
+    valido. Le pagine DevTools NON sono considerate tali: chiamata dal
+    pannello, il dialog di conferma spesso non compare affatto, senza alcun
+    errore. Sintomo: clicchi il toggle e non succede niente.
+
+    Qui siamo in una finestra di estensione normale, dove il clic e' un
+    gesture valido: il dialog compare sempre. Il pannello scopre l'esito
+    ascoltando chrome.permissions.onAdded / onRemoved, e questa finestra si
+    chiude da sola.
+    ═══════════════════════════════════════════════════════════════════════════
+  -->
+
+  <h1 id="title">Permesso richiesto</h1>
+
+  <p class="desc" id="desc">
+    Per attivare questa funzione l'estensione ha bisogno di un permesso
+    aggiuntivo.
+  </p>
+
+  <ul class="perms" id="perms"><!-- popolato da grant.js --></ul>
+
+  <div class="status" id="status" role="status" aria-live="polite"></div>
+
+  <div class="actions">
+    <button type="button" id="cancel">Annulla</button>
+    <button type="button" id="grant" class="primary" autofocus>Consenti</button>
+  </div>
+
+  <p class="hint" id="hint">
+    Il permesso può essere revocato in qualsiasi momento disattivando la
+    funzione nelle Impostazioni del pannello.
+  </p>
+
+  <script src="grant.js"></script>
+</body>
+</html>

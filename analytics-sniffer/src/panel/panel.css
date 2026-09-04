@@ -1,0 +1,1627 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Analytics Sniffer — stile del pannello DevTools
+   v3: credit con tooltip, lista categorie, tab "stale", nota batch
+
+   PRINCIPI
+   · Palette a grigi CALDI neutri: il nero puro su schermo affatica e appiattisce
+     la gerarchia. I fondi derivano tutti da poche variabili.
+   · Tre livelli di accordion (view > event > group) distinguibili a colpo
+     d'occhio: rientro progressivo, guida verticale, peso decrescente.
+   · Il colore del tool arriva da --tool-color, impostata da panel.js: nessun
+     selettore per singolo connettore, così un tool nuovo si colora da sé.
+   · Responsive reale: il pannello DevTools può essere ancorato a 300px. Sotto
+     certe soglie il testo secondario scompare, le icone restano.
+   · Nessuna animazione oltre i 200ms, tranne il pulse: è uno strumento di
+     lavoro, non una vitrine.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────── 1. TEMA ─────────────────────────────── */
+
+:root,
+html[data-theme='light'] {
+  --bg:            #ffffff;
+  --bg-sunken:     #fafaf9;
+  --bg-raised:     #ffffff;
+  --bg-hover:      #f4f4f2;
+  --bg-active:     #ebebe8;
+
+  --fg:            #1f1f1d;
+  --fg-muted:      #6b6b66;
+  --fg-faint:      #9b9b94;
+
+  --border:        #e6e6e2;
+  --border-strong: #d4d4ce;
+
+  --accent:        #7c5cf0;
+  --accent-fg:     #ffffff;
+  --accent-soft:   #f2eeff;
+
+  --ok:            #17803d;
+  --warn:          #a35b00;
+  --err:           #c62828;
+  --info:          #0b6ba8;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / .05);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / .08);
+  --shadow-lg: -8px 0 32px rgb(0 0 0 / .12);
+
+  color-scheme: light;
+}
+
+html[data-theme='dark'] {
+  --bg:            #1b1b1a;
+  --bg-sunken:     #161615;
+  --bg-raised:     #232322;
+  --bg-hover:      #2a2a28;
+  --bg-active:     #333330;
+
+  --fg:            #ebebe8;
+  --fg-muted:      #a3a39d;
+  --fg-faint:      #74746e;
+
+  --border:        #353532;
+  --border-strong: #474743;
+
+  --accent:        #a48cff;
+  --accent-fg:     #1b1b1a;
+  --accent-soft:   #2a2440;
+
+  --ok:            #4ade80;
+  --warn:          #fbbf24;
+  --err:           #f87171;
+  --info:          #60a5fa;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / .3);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / .35);
+  --shadow-lg: -8px 0 32px rgb(0 0 0 / .45);
+
+  color-scheme: dark;
+}
+
+/* 'system' segue il sistema operativo. Quando DevTools è scuro ma il sistema
+   chiaro, theme.js scrive direttamente data-theme="dark": la media query da
+   sola sbaglierebbe, perché il pannello vive dentro DevTools, non nel sistema. */
+@media (prefers-color-scheme: dark) {
+  html[data-theme='system'] {
+    --bg:            #1b1b1a;
+    --bg-sunken:     #161615;
+    --bg-raised:     #232322;
+    --bg-hover:      #2a2a28;
+    --bg-active:     #333330;
+
+    --fg:            #ebebe8;
+    --fg-muted:      #a3a39d;
+    --fg-faint:      #74746e;
+
+    --border:        #353532;
+    --border-strong: #474743;
+
+    --accent:        #a48cff;
+    --accent-fg:     #1b1b1a;
+    --accent-soft:   #2a2440;
+
+    --ok:            #4ade80;
+    --warn:          #fbbf24;
+    --err:           #f87171;
+    --info:          #60a5fa;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / .3);
+    --shadow-md: 0 4px 12px rgb(0 0 0 / .35);
+    --shadow-lg: -8px 0 32px rgb(0 0 0 / .45);
+
+    color-scheme: dark;
+  }
+}
+
+:root {
+  --radius:    6px;
+  --radius-sm: 4px;
+  --radius-lg: 10px;
+
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+
+  --toolbar-h: 40px;
+  --tabs-h:    34px;
+
+  /* Colore di fallback: sovrascritto da panel.js con quello del tool. */
+  --tool-color: var(--accent);
+}
+
+/* ───────────────────────────── 2. RESET ───────────────────────────── */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;               /* solo .uad-panes scorre */
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--fg);
+  font: 12.5px/1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+[hidden] { display: none !important; }
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--radius-sm);
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 5px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--fg-faint); }
+
+/* ──────────────────────────── 3. TOOLBAR ──────────────────────────── */
+
+.uad-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--toolbar-h);
+  padding: 0 8px;
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.uad-toolbar__group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.uad-toolbar__group--search {
+  flex: 1 1 auto;
+  min-width: 0;                   /* permette il restringimento dell'input */
+  gap: 6px;
+}
+
+.uad-toolbar__group--optional { margin-left: auto; }
+
+.uad-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: var(--radius);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  transition: background .12s ease, color .12s ease;
+}
+
+.uad-btn:hover  { background: var(--bg-hover); color: var(--fg); }
+.uad-btn:active { background: var(--bg-active); }
+
+.uad-btn__icon {
+  font-size: 14px;
+  line-height: 1;
+  display: inline-block;
+}
+
+.uad-btn__label { font-size: 12px; font-weight: 500; }
+
+.uad-btn--icon { padding: 0 7px; }
+
+/* Toggle premuto: fondo accento tenue, non un bordo — meno rumore visivo. */
+.uad-btn[aria-pressed='true'],
+.uad-btn[aria-expanded='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Filtri attivi anche a pannello chiuso: lo stato deve restare visibile. */
+.uad-btn.has-filters {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.uad-btn--ghost {
+  border: 1px solid var(--border);
+  height: 28px;
+}
+
+.uad-btn--primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  height: 28px;
+  font-weight: 550;
+}
+.uad-btn--primary:hover { background: var(--accent); filter: brightness(1.08); }
+
+/* Stop navigazione attivo: rosso pieno + puntino pulsante. */
+#btn-stopnav.is-on {
+  background: color-mix(in srgb, var(--err) 16%, transparent);
+  color: var(--err);
+}
+
+.uad-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--err);
+  animation: uad-dot-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes uad-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .35; }
+}
+
+.uad-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  color: var(--fg-faint);
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+.uad-icon-btn:hover { background: var(--bg-hover); color: var(--fg); }
+
+/* ───────────────────────── 4. RICERCA ───────────────────────── */
+
+.uad-search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color .12s ease;
+}
+
+.uad-search:focus-within { border-color: var(--accent); }
+
+.uad-search__icon { color: var(--fg-faint); font-size: 13px; flex: 0 0 auto; }
+
+.uad-search__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  outline: none;
+}
+.uad-search__input::placeholder { color: var(--fg-faint); }
+.uad-search__input::-webkit-search-cancel-button { display: none; }
+
+.uad-search__count {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  padding: 1px 5px;
+  background: var(--bg-hover);
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+/* Ricerca attiva senza risultati: lo diciamo nel contatore, invece di lasciare
+   un campo apparentemente funzionante. */
+.uad-search__count[data-empty='true'] {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+.uad-search__nav,
+.uad-search__clear {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  color: var(--fg-faint);
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+.uad-search__nav:hover,
+.uad-search__clear:hover { background: var(--bg-hover); color: var(--fg); }
+
+/* ───────────────────────── 5. BADGE E TAG ───────────────────────── */
+
+.uad-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 15px;
+  padding: 0 5px;
+  border-radius: 7px;
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.uad-badge--live {
+  background: none;
+  color: var(--accent);
+  font-size: 8px;
+  padding: 0 2px;
+  animation: uad-dot-pulse 1.4s ease-in-out infinite;
+}
+
+/* Canale di osservazione: il badge diagnostico più importante del pannello.
+   "hook" da solo significa che il codice ha chiesto di tracciare ma nulla è
+   partito — si vede scorrendo la lista, senza aprire nulla. */
+.uad-event__source[data-channel='network'],
+.uad-event__source[data-channel='hook+network'],
+.uad-event__source[data-channel='datalayer+network'],
+.uad-event__source[data-channel='hook+network+polling'] {
+  background: color-mix(in srgb, var(--ok) 15%, transparent);
+  color: var(--ok);
+}
+.uad-event__source[data-channel='hook'] {
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+}
+.uad-event__source[data-channel='datalayer'] {
+  background: color-mix(in srgb, var(--info) 15%, transparent);
+  color: var(--info);
+}
+.uad-event__source[data-channel='polling'] {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn);
+}
+.uad-event__source[data-channel='unknown'] { color: var(--fg-faint); }
+
+.uad-event__status[data-status='partial'] {
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+}
+.uad-event__status[data-status='error'] {
+  background: color-mix(in srgb, var(--err) 18%, transparent);
+  color: var(--err);
+}
+
+.uad-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 15px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.uad-tag--flag {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  background: color-mix(in srgb, var(--info) 12%, transparent);
+  color: var(--info);
+}
+
+.uad-tag--decoded {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+/* Tag del tool nell'header dell'evento: prende il colore del connettore. */
+.uad-event__tool {
+  background: color-mix(in srgb, var(--tool-color) 15%, transparent);
+  color: var(--tool-color);
+  font-weight: 600;
+}
+
+/* Badge di stato nella lista tool dei Settings. */
+[data-tool-state][data-state='detected'] {
+  background: color-mix(in srgb, var(--ok) 15%, transparent);
+  color: var(--ok);
+}
+[data-tool-state][data-state='listening'] {
+  background: color-mix(in srgb, var(--info) 13%, transparent);
+  color: var(--info);
+}
+/* Tool con eventi in memoria ma disattivato. */
+[data-tool-state][data-state='stale'] {
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+  color: var(--warn);
+}
+
+/* ───────────────────────── 6. FILTRI ───────────────────────── */
+
+.uad-filters {
+  padding: 8px;
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+.uad-filters__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.uad-filters__actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.uad-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.uad-chip--logic {
+  height: 24px;
+  min-width: 40px;
+  padding: 0 7px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
+  transition: background .12s ease;
+}
+.uad-chip--logic:hover { filter: brightness(.96); }
+.uad-chip--logic[data-logic='OR'] {
+  background: color-mix(in srgb, var(--info) 16%, transparent);
+  color: var(--info);
+}
+
+.uad-select,
+.uad-input {
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11.5px;
+  outline: none;
+}
+.uad-select:focus, .uad-input:focus { border-color: var(--accent); }
+.uad-select { cursor: pointer; }
+.uad-input  { flex: 1 1 120px; min-width: 90px; }
+
+/* Regex invalida: segnalata all'istante, non scoperta dai risultati vuoti. */
+.uad-input[data-invalid='true'] {
+  border-color: var(--err);
+  background: color-mix(in srgb, var(--err) 6%, transparent);
+}
+
+/* ───────────────────────── 7. TAB DINAMICHE ───────────────────────── */
+
+.uad-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  min-height: var(--tabs-h);
+  padding: 0 6px;
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 0 0 auto;
+  scrollbar-width: none;
+}
+.uad-tabs::-webkit-scrollbar { display: none; }
+.uad-tabs:empty { display: none; }
+
+.uad-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  transition: color .12s ease, border-color .12s ease, background .12s ease;
+}
+.uad-tab:hover { background: var(--bg-hover); color: var(--fg); }
+
+.uad-tab.is-active {
+  color: var(--fg);
+  border-bottom-color: var(--tool-color, var(--accent));
+  font-weight: 550;
+}
+
+/* Tool disattivato con eventi già raccolti: la tab resta consultabile ma
+   dichiara di essere ferma. Bordo tratteggiato e colore attenuato. */
+.uad-tab.is-stale {
+  opacity: .62;
+  border-bottom-style: dashed;
+}
+.uad-tab.is-stale .uad-tab__dot {
+  background: var(--fg-faint);
+}
+.uad-tab.is-stale.is-active {
+  opacity: .85;
+  border-bottom-color: var(--fg-faint);
+}
+
+.uad-tab__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tool-color);
+  flex: 0 0 auto;
+}
+
+.uad-tab__label { font-size: 12px; }
+
+/* ───────────────────────── 8. CORPO ───────────────────────── */
+
+.uad-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.uad-panes {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px 0 40px;
+}
+
+.uad-empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.uad-empty__title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.uad-empty__text,
+.uad-empty__hint {
+  margin: 0;
+  max-width: 48ch;
+  color: var(--fg-muted);
+  line-height: 1.55;
+}
+
+.uad-empty__hint {
+  font-size: 11.5px;
+  color: var(--fg-faint);
+  padding-top: 6px;
+}
+
+.uad-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ─────────────────── 9. ACCORDION — LIVELLO 1: VIEW ─────────────────── */
+
+.uad-view {
+  margin: 0 6px 5px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.uad-view__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 9px;
+  text-align: left;
+  background: var(--bg-sunken);
+  transition: background .12s ease;
+}
+.uad-view__head:hover { background: var(--bg-hover); }
+
+.uad-view__caret,
+.uad-event__caret,
+.uad-group__caret {
+  display: inline-block;
+  width: 10px;
+  color: var(--fg-faint);
+  font-size: 9px;
+  transition: transform .15s ease;
+  flex: 0 0 auto;
+}
+
+/* La rotazione del caret è guidata da aria-expanded: stato accessibile e stato
+   visivo restano per costruzione sincronizzati, e panel.js non deve ricordarsi
+   di aggiornare due attributi. */
+[aria-expanded='true'] > .uad-view__caret,
+[aria-expanded='true'] > .uad-event__caret,
+[aria-expanded='true'] > .uad-group__caret {
+  transform: rotate(90deg);
+}
+
+.uad-view__url {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg);
+  direction: ltr;
+}
+
+.uad-view__spa {
+  background: color-mix(in srgb, var(--info) 15%, transparent);
+  color: var(--info);
+}
+
+.uad-view__time {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-faint);
+  flex: 0 0 auto;
+}
+
+.uad-view__body { padding: 3px 0; }
+
+/* ─────────────────── 10. ACCORDION — LIVELLO 2: EVENTO ─────────────────── */
+
+.uad-event {
+  position: relative;
+  margin: 2px 6px;
+  border-radius: var(--radius-sm);
+  border-left: 2px solid transparent;
+  transition: background .12s ease;
+}
+.uad-event:hover { background: var(--bg-hover); }
+
+/* Il bordo colorato appare solo su hover o quando aperto: con 50 eventi in
+   lista, 50 barre colorate sarebbero rumore che nasconde la gerarchia. */
+.uad-event:hover,
+.uad-event:has(> [aria-expanded='true']) {
+  border-left-color: var(--tool-color);
+}
+
+.uad-event__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.uad-event__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.uad-event__delta {
+  font-family: var(--mono);
+  color: var(--fg-faint);
+  background: none;
+}
+
+.uad-event__clock {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-faint);
+  flex: 0 0 auto;
+}
+
+.uad-event__devref { opacity: 0; transition: opacity .12s ease; }
+.uad-event:hover .uad-event__devref,
+.uad-event__devref:focus-visible { opacity: 1; }
+
+.uad-event__body {
+  padding: 3px 8px 8px 20px;
+}
+
+/* Avviso "nessuna hit di rete osservata": la diagnosi più utile del tool, in
+   evidenza e non nascosta tra i campi. */
+.uad-event__warning {
+  margin: 0 0 7px;
+  padding: 6px 9px;
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border-left: 2px solid var(--warn);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--warn);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+/* Nota informativa: meno enfasi dell'avviso. Usata per il batch, dove i delta
+   ms tra eventi non sono significativi perché sono partiti insieme. */
+.uad-event__note {
+  margin: 0 0 7px;
+  padding: 5px 8px;
+  background: var(--bg-sunken);
+  border-left: 2px solid var(--border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.uad-event__raw {
+  margin-top: 8px;
+  font-size: 11px;
+}
+.uad-event__raw summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+  padding: 3px 0;
+  user-select: none;
+}
+.uad-event__raw summary:hover { color: var(--fg); }
+.uad-event__raw pre {
+  margin: 5px 0 0;
+  padding: 8px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--fg-muted);
+}
+
+/* Pulse: doppio anello che si espande e sfuma. Solo sugli eventi arrivati in
+   tempo reale, mai su quelli caricati dallo storico. La scala è minima (1.015)
+   perché un'espansione ampia farebbe saltare il layout. */
+.uad-event.is-pulse {
+  animation: uad-pulse-bg 2s ease-out;
+}
+.uad-event.is-pulse::before,
+.uad-event.is-pulse::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--tool-color);
+  pointer-events: none;
+  animation: uad-pulse-ring 1.6s ease-out forwards;
+}
+.uad-event.is-pulse::after { animation-delay: .28s; }
+
+@keyframes uad-pulse-bg {
+  0%   { background: color-mix(in srgb, var(--tool-color) 14%, transparent); }
+  100% { background: transparent; }
+}
+
+@keyframes uad-pulse-ring {
+  0%   { opacity: .9; transform: scale(1); }
+  100% { opacity: 0;  transform: scale(1.015); }
+}
+
+/* Risultato di ricerca corrente. */
+.uad-event.is-current-match,
+.uad-view.is-current-match {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ─────────────────── 11. ACCORDION — LIVELLO 3: GRUPPO ─────────────────── */
+
+.uad-group { margin: 3px 0; }
+
+.uad-group__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 4px;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  transition: background .12s ease;
+}
+.uad-group__head:hover { background: var(--bg-hover); }
+
+.uad-group__name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: .045em;
+}
+
+/* Le sezioni che nascono chiuse (per default il COME: Config, Core, Consent…)
+   hanno meno peso visivo. La gerarchia COSA→COME non è solo nell'ordine. */
+.uad-group__head[data-default-open='false'] .uad-group__name {
+  color: var(--fg-faint);
+  font-weight: 500;
+}
+
+.uad-group__body {
+  position: relative;
+  padding-left: 14px;
+}
+
+/* Guida verticale tree-view: collega il titolo del gruppo al suo contenuto. */
+.uad-group__guide {
+  position: absolute;
+  left: 4px;
+  top: 0;
+  bottom: 4px;
+  width: 1px;
+  background: var(--border);
+}
+
+.uad-group__rows { display: flex; flex-direction: column; }
+
+/* ───────────────────────── 12. RIGHE KEY-VALUE ───────────────────────── */
+
+.uad-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 5px;
+  border-radius: 3px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  transition: background .1s ease;
+}
+.uad-row:last-child { border-bottom: none; }
+.uad-row:hover { background: var(--bg-hover); }
+
+.uad-row__key {
+  flex: 0 0 auto;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--tool-color);
+}
+
+.uad-row__info {
+  width: 13px;
+  height: 13px;
+  min-width: 13px;
+  font-size: 9px;
+  color: var(--fg-faint);
+  opacity: 0;
+  transition: opacity .12s ease;
+  align-self: center;
+}
+.uad-row:hover .uad-row__info,
+.uad-row__info:focus-visible { opacity: 1; }
+
+/* Cross-check identity: 🔗 verde o ⚠️ rosso. Il caso rosso è quello che vale:
+   significa utente contato due volte, sessioni spezzate, attribuzione rotta. */
+.uad-row__link {
+  font-size: 10px;
+  flex: 0 0 auto;
+  cursor: help;
+  align-self: center;
+}
+.uad-row__link[data-ok='false'] {
+  /* Un mismatch non deve passare inosservato scorrendo la lista. */
+  animation: uad-dot-pulse 2s ease-in-out 3;
+}
+
+.uad-row__value {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg);
+  cursor: pointer;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  border-radius: 2px;
+  padding: 0 2px;
+  transition: background .1s ease;
+}
+.uad-row__value:hover { background: var(--accent-soft); }
+
+/* Evidenziazione dei match di ricerca. */
+.uad-row mark,
+.uad-event__name mark,
+.uad-view__url mark,
+.uad-product__name mark {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* ───────────────────────── 13. PRODOTTI ───────────────────────── */
+
+.uad-event__products {
+  margin-top: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.uad-product {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.uad-product__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  background: var(--bg-sunken);
+}
+
+.uad-product__idx {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-faint);
+  flex: 0 0 auto;
+}
+
+.uad-product__name {
+  font-size: 11.5px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.uad-product__rows { padding: 2px 5px; }
+
+/* ───────────────────────── 14. DRAWER ───────────────────────── */
+
+.uad-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(440px, 94vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  z-index: 40;
+  animation: uad-slide-in .18s cubic-bezier(.2, .8, .3, 1);
+}
+
+@keyframes uad-slide-in {
+  from { transform: translateX(14px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+.uad-drawer__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.uad-drawer__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+  flex: 0 0 auto;
+}
+
+.uad-drawer__subtitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg-faint);
+}
+
+.uad-drawer__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.uad-drawer__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.uad-drawer__foot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-sunken);
+  flex: 0 0 auto;
+}
+
+/* ───────────────────── 15. SEZIONI E CONTROLLI ───────────────────── */
+
+.uad-section { margin-bottom: 24px; }
+.uad-section:last-of-type { margin-bottom: 12px; }
+
+.uad-section__title {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+.uad-section__hint {
+  margin: 0 0 10px;
+  font-size: 11.5px;
+  color: var(--fg-faint);
+  line-height: 1.5;
+}
+
+.uad-section__actions {
+  display: flex;
+  gap: 7px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.uad-switch {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  cursor: pointer;
+}
+.uad-switch:last-child { border-bottom: none; }
+
+.uad-switch input[type='checkbox'] {
+  grid-row: 1 / 3;
+  margin: 0;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.uad-switch__label { font-size: 12.5px; font-weight: 500; }
+
+.uad-switch__note {
+  grid-column: 2;
+  font-size: 11px;
+  color: var(--fg-faint);
+  line-height: 1.45;
+}
+
+.uad-switch__note code {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 0 3px;
+  background: var(--bg-hover);
+  border-radius: 2px;
+}
+
+/* Permesso mancante: la nota diventa un avviso. */
+.uad-switch[data-permission='missing'] .uad-switch__note { color: var(--warn); }
+
+.uad-switch--inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: none;
+  white-space: nowrap;
+}
+
+.uad-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.uad-field__label { font-size: 12px; font-weight: 500; }
+
+.uad-field__note { font-size: 11px; color: var(--fg-faint); line-height: 1.45; }
+
+.uad-field input[type='number'] {
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-family: var(--mono);
+  outline: none;
+  max-width: 130px;
+}
+.uad-field input[type='number']:focus { border-color: var(--accent); }
+
+.uad-diagnostics {
+  margin: 10px 0 0;
+  padding: 9px;
+  max-height: 340px;
+  overflow: auto;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg-muted);
+}
+
+/* ───────────────────── 16. LISTA TOOL (drag) ───────────────────── */
+
+.uad-tool-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.uad-tool-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--tool-color);
+  border-radius: var(--radius-sm);
+  cursor: grab;
+  transition: background .12s ease, transform .12s ease, opacity .12s ease;
+}
+.uad-tool-item:hover { background: var(--bg-hover); }
+
+.uad-tool-item.is-dragging {
+  opacity: .4;
+  cursor: grabbing;
+}
+
+.uad-tool-item.is-drop-target {
+  border-top: 2px solid var(--accent);
+  transform: translateY(1px);
+}
+
+.uad-tool-item__grip {
+  color: var(--fg-faint);
+  font-size: 11px;
+  letter-spacing: -2px;
+  cursor: grab;
+  flex: 0 0 auto;
+}
+
+.uad-tool-item .uad-switch--inline { flex: 1 1 auto; min-width: 0; }
+.uad-tool-item .uad-switch__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ───────────────── 17. LISTA CATEGORIE (sezioni dei campi) ───────────────── */
+
+.uad-catlist {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.uad-catlist__group {
+  margin: 10px 0 3px;
+  font-size: 10px;
+  font-weight: 650;
+  color: var(--fg-faint);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.uad-catlist__group:first-child { margin-top: 0; }
+
+.uad-cat-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background .1s ease;
+}
+.uad-cat-item:hover { background: var(--bg-hover); }
+
+.uad-cat-item input[type='checkbox'] {
+  margin: 0;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.uad-cat-item__name {
+  font-size: 11.5px;
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Categoria mai vista negli eventi di questa pagina: attenuata, così capisci a
+   vista quali sono pertinenti al sito che stai guardando. */
+.uad-cat-item[data-unseen='true'] { opacity: .45; }
+.uad-cat-item[data-unseen='true']:hover { opacity: .75; }
+
+/* ───────────────────── 18. SEGMENTED CONTROL ───────────────────── */
+
+.uad-segmented {
+  display: inline-flex;
+  padding: 2px;
+  background: var(--bg-hover);
+  border-radius: var(--radius);
+  gap: 2px;
+}
+
+.uad-segmented__btn {
+  height: 22px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background .12s ease, color .12s ease;
+}
+.uad-segmented__btn:hover { color: var(--fg); }
+
+.uad-segmented__btn.is-active {
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: var(--shadow-sm);
+}
+
+/* L'unico livello distruttivo del clear: colorato solo quando selezionato. */
+.uad-segmented__btn--danger.is-active { color: var(--err); }
+
+/* ───────────────────── 19. COOKIE ───────────────────── */
+
+.uad-cookie-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.uad-cookie {
+  position: relative;
+  padding: 7px 9px;
+  padding-right: 28px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--vendor-color, var(--border-strong));
+  border-radius: var(--radius-sm);
+}
+
+.uad-cookie__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 5px;
+}
+
+.uad-cookie__name {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.uad-cookie__value {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  word-break: break-all;
+  border-radius: 2px;
+  transition: background .1s ease;
+}
+.uad-cookie__value:hover { background: var(--accent-soft); }
+
+.uad-cookie__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.uad-cookie__del {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.uad-cookie:hover .uad-cookie__del,
+.uad-cookie__del:focus-visible { opacity: 1; }
+.uad-cookie__del:hover { color: var(--err); }
+
+/* ───────────────────── 20. CREDIT ───────────────────── */
+
+.uad-credit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.uad-credit__version {
+  font-size: 10px;
+  color: var(--fg-faint);
+  font-family: var(--mono);
+}
+
+.uad-credit__info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: help;
+  border-radius: 50%;
+}
+
+.uad-credit__icon {
+  font-size: 11px;
+  color: var(--fg-faint);
+  transition: color .12s ease;
+}
+.uad-credit__info:hover .uad-credit__icon,
+.uad-credit__info:focus-visible .uad-credit__icon { color: var(--accent); }
+
+/* Tooltip: compare su hover E su focus da tastiera. */
+.uad-credit__tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  padding: 5px 8px;
+  background: var(--fg);
+  color: var(--bg);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(3px);
+  pointer-events: none;
+  transition: opacity .14s ease, transform .14s ease;
+}
+
+.uad-credit__info:hover .uad-credit__tip,
+.uad-credit__info:focus-visible .uad-credit__tip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ───────────────────── 21. FLOTTANTI ───────────────────── */
+
+/* Badge nuovi match: non scrolla mai da sé, il salto avviene solo su clic.
+   Rubare lo scroll a chi legge un payload rende inutile un debugger. */
+.uad-newmatch {
+  position: fixed;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md);
+  font-size: 11.5px;
+  font-weight: 550;
+  z-index: 30;
+  animation: uad-rise .18s ease-out;
+}
+.uad-newmatch:hover { filter: brightness(1.08); }
+
+.uad-newmatch__dot {
+  font-size: 8px;
+  animation: uad-dot-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes uad-rise {
+  from { transform: translateX(-50%) translateY(8px); opacity: 0; }
+  to   { transform: translateX(-50%) translateY(0);   opacity: 1; }
+}
+
+.uad-toast {
+  position: fixed;
+  bottom: 14px;
+  right: 14px;
+  max-width: 340px;
+  padding: 8px 12px;
+  background: var(--fg);
+  color: var(--bg);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  z-index: 50;
+  animation: uad-toast-in .16s ease-out;
+}
+
+@keyframes uad-toast-in {
+  from { transform: translateY(6px); opacity: 0; }
+  to   { transform: translateY(0);   opacity: 1; }
+}
+
+.uad-banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+  color: var(--warn);
+  font-size: 11.5px;
+  flex: 0 0 auto;
+  order: -1;                      /* sopra la toolbar: non si perde */
+}
+
+.uad-banner__text { flex: 1 1 auto; line-height: 1.45; }
+
+.uad-banner__action {
+  height: 22px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  background: var(--warn);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+.uad-banner__action:hover { filter: brightness(1.08); }
+.uad-banner .uad-icon-btn { color: var(--warn); }
+
+/* ───────────────────── 22. RESPONSIVE ───────────────────── */
+
+/* Pannello ancorato in basso ma non larghissimo. */
+@media (max-width: 860px) {
+  .uad-toolbar__group--primary .uad-btn__label { display: none; }
+  .uad-toolbar__group--primary .uad-btn { padding: 0 6px; }
+}
+
+/* Pannello ancorato lateralmente: solo icone, testo secondario via. */
+@media (max-width: 660px) {
+  .uad-btn__label       { display: none; }
+  .uad-btn              { padding: 0 6px; }
+  .uad-event__clock     { display: none; }
+  .uad-view__time       { display: none; }
+  .uad-toolbar          { gap: 6px; padding: 0 6px; }
+  .uad-toolbar__group--search { order: 3; flex-basis: 100%; }
+}
+
+/* Molto stretto: toolbar su due righe, chiave e valore impilati. */
+@media (max-width: 480px) {
+  .uad-toolbar {
+    flex-wrap: wrap;
+    padding: 5px 6px;
+    gap: 5px;
+  }
+  .uad-toolbar__group--optional { margin-left: 0; }
+  .uad-event__delta   { display: none; }
+  .uad-row            { flex-wrap: wrap; }
+  .uad-row__key       { max-width: 100%; }
+  .uad-row__value     { flex-basis: 100%; padding-left: 0; }
+  .uad-group__name    { font-size: 10px; }
+  .uad-drawer         { width: 100vw; }
+  .uad-credit__tip    { white-space: normal; width: 180px; }
+}
+
+/* ───────────────────── 23. ACCESSIBILITÀ ───────────────────── */
+
+/* Chi ha impostato "riduci animazioni" non deve vedere pulse e slide, ma
+   l'INFORMAZIONE resta: il pulse animato diventa un bordo statico, così si
+   distingue ancora quale evento è nuovo. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+  .uad-event.is-pulse {
+    box-shadow: inset 0 0 0 1.5px var(--tool-color);
+  }
+  .uad-row__link[data-ok='false'] {
+    outline: 1px solid var(--err);
+    outline-offset: 1px;
+    border-radius: 2px;
+  }
+  .uad-credit__tip { transform: none; }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --border:        #999;
+    --border-strong: #666;
+    --fg-faint:      var(--fg-muted);
+  }
+  .uad-row { border-bottom-color: var(--border); }
+  .uad-group__head[data-default-open='false'] .uad-group__name { color: var(--fg-muted); }
+  .uad-cat-item[data-unseen='true'] { opacity: .7; }
+  .uad-tab.is-stale { opacity: .8; }
+}

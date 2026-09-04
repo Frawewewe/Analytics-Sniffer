@@ -1,0 +1,64 @@
+{
+  "manifest_version": 3,
+  "name": "Analytics Sniffer",
+  "short_name": "Sniffer",
+  "version": "0.2.0",
+  "description": "Pannello DevTools per intercettare in tempo reale le chiamate analytics (GA4, GTM, Adobe Analytics, Adobe Web SDK) su qualsiasi sito.",
+  "minimum_chrome_version": "111",
+
+  "permissions": [
+    "storage",
+    "declarativeNetRequest"
+  ],
+
+  "optional_permissions": [
+    "cookies"
+  ],
+
+  "host_permissions": ["<all_urls>"],
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "devtools_page": "devtools.html",
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "world": "MAIN",
+      "run_at": "document_start",
+      "all_frames": false,
+      "js": [
+        "src/main/core/namespace.js",
+        "src/main/core/serializer.js",
+        "src/main/core/emitter.js",
+        "src/main/core/session.js",
+        "src/main/core/dedupe.js",
+        "src/main/core/net-hooks.js",
+        "src/main/core/global-watcher.js",
+        "src/main/connectors/adobe-mapper.js",
+        "src/main/connectors/ga4.js",
+        "src/main/connectors/gtm.js",
+        "src/main/connectors/adobe-legacy.js",
+        "src/main/connectors/adobe-aep.js",
+        "src/main/connectors/generic-vendors.js",
+        "src/main/content-script.js"
+      ]
+    },
+    {
+      "matches": ["<all_urls>"],
+      "world": "ISOLATED",
+      "run_at": "document_start",
+      "all_frames": false,
+      "js": ["src/bridge.js"]
+    }
+  ],
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
