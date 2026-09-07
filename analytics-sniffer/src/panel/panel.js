@@ -2,22 +2,13 @@
  * Analytics Sniffer — orchestratore del pannello DevTools
  * Contesto: pagina di estensione (src/panel/panel.html), ES module
  *
- * v4 — CORREZIONE del bug "i sotto-accordion non si aprono", parte 2 di 3.
- *
- * COSA ERA ROTTO
- * Il click su un accordion chiamava solo state.toggle(), che notifica e fa
- * schedulare un re-render. Ma il re-render non ricostruisce il corpo di un
- * evento se la sua firma non cambia: il DOM del gruppo restava identico e il
- * click sembrava non funzionare.
- *
- * COME È RISOLTO
- * La delega applica il nuovo stato DIRETTAMENTE al DOM (aria-expanded + hidden)
- * nello stesso tick del click. Il feedback è istantaneo e non dipende dal
- * ciclo di rendering. Lo stato viene comunque scritto in state.js, che si
- * occupa della persistenza e informa gli altri consumatori.
- *
- * Aggiunto anche catVersion: quando cambi il default di una sezione nei
- * Settings, i corpi degli eventi già aperti si riallineano.
+ * v5 — due modifiche:
+ *   1. il mapper EDDL non è più un evento. Arriva come metadato (__uadMapper),
+ *      non finisce tra le hit, e alimenta una barra sopra la cronologia visibile
+ *      solo nelle tab Adobe. Il toggle accanto alla barra accende la mappatura
+ *      inline nelle righe eVar/prop, e viene ricordato tra le sessioni.
+ *   2. corretta la chiamata a cookiesMod.loadIdentityOnly(), che ora esiste
+ *      davvero in cookies.js.
  *
  * FLUSSO DEI DATI
  *   background --port 'uad-panel'--> panel          eventi live
@@ -28,6 +19,12 @@
  * Dati (store) e stato della UI (state.js) sono strutture SEPARATE. Il render
  * legge sempre lo stato: è l'unico motivo per cui l'arrivo di un evento o il
  * toggle di un'opzione non richiude gli accordion aperti dall'utente.
+ *
+ * GESTIONE DEGLI EVENTI DOM
+ * Delega su contenitori stabili, non un listener per nodo. E il toggle di un
+ * accordion viene applicato DIRETTAMENTE al DOM nello stesso tick del click: il
+ * corpo di un evento non si ricostruisce se la sua firma non cambia, quindi
+ * affidarsi al re-render non funzionerebbe.
  */
 
 'use strict';
@@ -54,6 +51,9 @@ const TOOL_META = {
   'generic':      { label: 'Altri tool',    color: '#6b7280' }
 };
 
+/** Tool su cui la barra mapper è pertinente. */
+const ADOBE_TOOLS = ['adobe-legacy', 'adobe-aep'];
+
 function toolMeta(id) {
   if (TOOL_META[id]) return TOOL_META[id];
   let h = 0;
@@ -63,6 +63,10 @@ function toolMeta(id) {
     color: `hsl(${h} 65% 45%)`
   };
 }
+
+/** Chiave di storage del toggle mapper: è una preferenza di lettura, non una
+ *  configurazione, quindi vive separata dai settings del world MAIN. */
+const MAPPER_TOGGLE_KEY = 'uad_mapper_inline';
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Stato
@@ -86,6 +90,12 @@ const ui = {
   identityIndex: null,     // dai cookie, per il cross-check
   crossCheckVersion: 0,    // cambia quando l'index si aggiorna
   catVersion:   0,         // cambia quando i default delle sezioni cambiano
+
+  // Mapper EDDL: metadato, non evento.
+  mapper:       null,      // { entries, sourceElement, dataLayerElement, map }
+  mapperInline: false,     // toggle: mostra la mappatura accanto alle chiavi
+  mapperVersion: 0,        // entra nella firma di rendering
+
   knownIds:     [],        // id accordion presenti: collapseAll e gc
   renderQueued: false,
   bootDone:     false
@@ -207,10 +217,34 @@ function categoryOpen(cat) {
   return Object.prototype.hasOwnProperty.call(cs, cat) ? cs[cat] === true : true;
 }
 
+/**
+ * Mappatura EDDL di una variabile, o null.
+ *
+ * Restituisce un valore solo quando: il toggle è attivo, il mapper è stato
+ * rilevato, e la tab corrente è Adobe. L'ultima condizione evita di mostrare
+ * mappature Adobe accanto a parametri GA4 che si chiamano per caso in modo
+ * simile.
+ */
+function mapperFor(varName) {
+  if (!ui.mapperInline || !ui.mapper || !ui.mapper.map) return null;
+  if (!ADOBE_TOOLS.includes(ui.activeTool)) return null;
+
+  const m = /^(eVar|evar|prop|Prop)(\d{1,3})$/.exec(String(varName || ''));
+  if (!m) return null;
+  const norm = (/^p/i.test(m[1]) ? 'prop' : 'eVar') + m[2];
+
+  // Stringa vuota = "variabile riconosciuta ma non mappata". render.js la
+  // distingue da null e mostra "non mappata" attenuato: senza questo, l'utente
+  // non saprebbe se il toggle non funziona o se la variabile è assente dal
+  // mapper.
+  return ui.mapper.map[norm] || '';
+}
+
 const renderer = createRenderer({
   toolMeta,
   state: uiState,
   categoryOpen,
+  mapperFor,
   crossCheck: (key, value) => {
     if (!ui.settings.features?.cookieCrossCheck) return null;
     if (!cookiesMod || !ui.identityIndex) return null;
@@ -269,6 +303,8 @@ function resetStore() {
   store.dropped = 0;
   search.clearNewMatches();
   uiState.gc(new Set());          // niente id validi: pulizia totale
+  // Il mapper NON viene azzerato: è un metadato della pagina, non un dato
+  // raccolto. Svuotare gli eventi non lo rende obsoleto.
 }
 
 function ingest(events, live) {
@@ -279,8 +315,9 @@ function ingest(events, live) {
   for (const ev of events) {
     if (!ev || typeof ev !== 'object') continue;
 
-    // Risposta al comando "diagnose": non è un evento di tracking.
+    // Metadati, non eventi: intercettati e non memorizzati tra le hit.
     if (ev.__uadDiagnostics) { showDiagnostics(ev.__uadDiagnostics); continue; }
+    if (ev.__uadMapper)      { onMapper(ev.__uadMapper); continue; }
 
     const k = eventKey(ev);
     if (store.seenIds.has(k)) continue;
@@ -326,6 +363,121 @@ async function loadHistory() {
   if (!r.ok) { console.error('[Sniffer panel] getHistory', r.error); return; }
   store.dropped = r.dropped || 0;
   ingest(r.events || [], false);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Mapper EDDL
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/** Arriva da adobe-mapper.js sul canale HIT, non come evento. */
+function onMapper(data) {
+  if (!data || typeof data !== 'object') return;
+
+  const entries = Number(data.entries) || 0;
+
+  // entries a 0 significa mapper disattivato o non più trovato: la barra deve
+  // sparire, non restare con dati morti.
+  ui.mapper = entries > 0 ? data : null;
+  ui.mapperVersion++;
+
+  renderMapbar();
+  scheduleRender();
+}
+
+function renderMapbar() {
+  const bar = $('#mapbar');
+  const list = $('#mapbar-list');
+  if (!bar) return;
+
+  // La barra è pertinente solo nelle tab Adobe: le mappature eVar/prop non
+  // hanno senso accanto ai parametri GA4.
+  const relevant = !!ui.mapper && ADOBE_TOOLS.includes(ui.activeTool);
+
+  bar.hidden = !relevant;
+  if (!relevant) { if (list) list.hidden = true; return; }
+
+  const n = ui.mapper.entries;
+  $('#mapbar-title').textContent =
+    `Mapper EDDL rilevato — ${n} variabil${n === 1 ? 'e' : 'i'}`;
+
+  const parts = [];
+  if (ui.mapper.sourceElement) parts.push(`data element "${ui.mapper.sourceElement}"`);
+  if (ui.mapper.dataLayerElement) parts.push(`data layer "${ui.mapper.dataLayerElement}"`);
+  $('#mapbar-src').textContent = parts.join(' · ');
+
+  const cb = $('#mapbar-toggle');
+  cb.checked = ui.mapperInline;
+  $('#mapbar-sw').classList.toggle('is-on', ui.mapperInline);
+  $('#mapbar-sw-label').textContent = ui.mapperInline
+    ? 'mappature attive'
+    : 'mostra mappature';
+
+  if (list && !list.hidden) renderMapList();
+}
+
+function renderMapList() {
+  const list = $('#mapbar-list');
+  if (!list || !ui.mapper || !ui.mapper.map) return;
+
+  const tplEl = document.getElementById('tpl-map-row');
+  if (!tplEl) { console.error('[Sniffer panel] template tpl-map-row mancante'); return; }
+
+  list.textContent = '';
+
+  // Ordinamento naturale: eVar1, eVar2, eVar10 — non alfabetico, che metterebbe
+  // eVar10 prima di eVar2. Le prop dopo le eVar.
+  const keys = Object.keys(ui.mapper.map).sort((a, b) => {
+    const pa = /^prop/i.test(a) ? 1 : 0;
+    const pb = /^prop/i.test(b) ? 1 : 0;
+    if (pa !== pb) return pa - pb;
+    return (parseInt(a.replace(/\D/g, ''), 10) || 0) -
+           (parseInt(b.replace(/\D/g, ''), 10) || 0);
+  });
+
+  for (const k of keys) {
+    const row = tplEl.content.firstElementChild.cloneNode(true);
+    row.querySelector('[data-k]').textContent = k;
+    row.querySelector('[data-v]').textContent = ui.mapper.map[k];
+    list.appendChild(row);
+  }
+}
+
+async function setMapperInline(on) {
+  ui.mapperInline = !!on;
+  ui.mapperVersion++;
+  renderMapbar();
+  scheduleRender();
+
+  // Preferenza di lettura, non configurazione: chiave di storage propria, così
+  // non tocca i settings propagati al world MAIN.
+  try { await chrome.storage.local.set({ [MAPPER_TOGGLE_KEY]: ui.mapperInline }); }
+  catch (e) { console.error('[Sniffer panel] persist mapper toggle', e); }
+}
+
+async function loadMapperToggle() {
+  try {
+    const r = await chrome.storage.local.get([MAPPER_TOGGLE_KEY]);
+    ui.mapperInline = r[MAPPER_TOGGLE_KEY] === true;
+  } catch (e) {
+    console.error('[Sniffer panel] load mapper toggle', e);
+  }
+}
+
+function bindMapbar() {
+  const cb = $('#mapbar-toggle');
+  if (cb) cb.addEventListener('change', () => setMapperInline(cb.checked));
+
+  const btn = $('#mapbar-list-btn');
+  const list = $('#mapbar-list');
+  if (btn && list) {
+    btn.addEventListener('click', () => {
+      const open = list.hidden;
+      list.hidden = !open;
+      btn.setAttribute('aria-expanded', String(open));
+      btn.textContent = open ? 'nascondi' : 'vedi mappature';
+      if (open) renderMapList();
+    });
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -398,7 +550,10 @@ function render() {
     activeTool:  ui.activeTool,
     filtering:   isFiltering(),
     crossCheckVersion: ui.crossCheckVersion,
-    catVersion:  ui.catVersion
+    catVersion:  ui.catVersion,
+    // Il toggle del mapper cambia il contenuto delle righe: entra nella firma,
+    // altrimenti i corpi già costruiti non si aggiornerebbero.
+    mapperVersion: ui.mapperVersion
   };
 
   renderer.renderTabs($('#tabs'), tools, ctx);
@@ -410,6 +565,8 @@ function render() {
   search.setMatches(renderer.collectMatches($('#panes')));
   uiState.maybeAutoGc(new Set(info.ids));
 
+  // La barra dipende dalla tab attiva, che può essere cambiata in questo render.
+  renderMapbar();
   renderEmptyStates(tools.length > 0, info.events > 0);
 }
 
@@ -441,8 +598,7 @@ async function loadSettings() {
 
 /**
  * Solo ciò che riguarda la toolbar: il resto lo gestisce settings.js.
- * Un solo flag per funzione controlla comportamento E icona: nessun doppio
- * livello di visibilità.
+ * Un solo flag per funzione controlla comportamento E icona.
  */
 function applySettingsToUI() {
   const f = ui.settings.features || {};
@@ -454,6 +610,14 @@ function applySettingsToUI() {
   $('#btn-showall').setAttribute('aria-pressed', String(ui.showAll));
 
   uiState.applySettings(ui.settings);
+
+  // Mapper disattivato dai Settings: la barra sparisce subito, senza attendere
+  // che il world MAIN pubblichi la mappa vuota.
+  if (f.adobeMapper !== true && ui.mapper) {
+    ui.mapper = null;
+    ui.mapperVersion++;
+    renderMapbar();
+  }
 
   // Il cross-check ha bisogno dell'indice identity dai cookie. Caricandolo qui,
   // i marker compaiono senza dover aprire il drawer.
@@ -535,42 +699,26 @@ function toggleDrawer(sel, btnSel) {
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Delega degli eventi
-   Due listener per tutto il pannello, invece di uno per nodo.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /**
  * Applica il nuovo stato di un accordion DIRETTAMENTE al DOM, nello stesso tick
  * del click.
  *
- * È la correzione del bug: affidarsi al re-render non funziona, perché il corpo
- * di un evento non si ricostruisce se la sua firma non cambia — e lo stato dei
- * gruppi, correttamente, non fa parte della firma.
- *
- * Lo stato viene comunque scritto in state.js: è lì che vive la persistenza e da
- * lì gli altri consumatori (ricerca, collapseAll) leggono.
+ * Affidarsi al re-render non funziona: il corpo di un evento non si ricostruisce
+ * se la sua firma non cambia — e lo stato dei gruppi, correttamente, non fa
+ * parte della firma. Lo stato viene comunque scritto in state.js, che gestisce
+ * persistenza e notifica agli altri consumatori.
  */
 function applyToggleToDom(head, open) {
   head.setAttribute('aria-expanded', String(open));
 
-  const level = head.dataset.level;
-  let body = null;
-
-  if (level === 'group') {
-    body = head.parentElement?.querySelector('[data-body]');
-  } else if (level === 'event') {
-    body = head.parentElement?.querySelector('[data-body]');
-  } else {
-    body = head.parentElement?.querySelector('[data-body]');
-  }
-
+  const body = head.parentElement?.querySelector('[data-body]');
   if (body) body.hidden = !open;
 
-  /**
-   * Aprire un EVENTO può richiedere di costruirne il corpo: le view e i gruppi
-   * hanno già tutto in memoria, ma il corpo di un evento è lazy. Un re-render
-   * lo popola, ed è corretto schedularlo qui.
-   */
-  if (level === 'event' && open) scheduleRender();
+  // Aprire un EVENTO può richiedere di costruirne il corpo: view e gruppi hanno
+  // già tutto in memoria, il corpo di un evento è lazy.
+  if (head.dataset.level === 'event' && open) scheduleRender();
 }
 
 function bindDelegation() {
@@ -581,7 +729,6 @@ function bindDelegation() {
       const dfltAttr = toggle.dataset.defaultOpen;
       const dflt = dfltAttr === undefined ? undefined : dfltAttr === 'true';
       const next = uiState.toggle(toggle.dataset.toggleId, dflt);
-      // Feedback immediato: non aspettiamo il ciclo di rendering.
       applyToggleToDom(toggle, next);
       return;
     }
@@ -637,8 +784,6 @@ function bindToolbar() {
     // collapseAll richiede la lista degli id: svuotare lo stato non basta,
     // perché i default riaprirebbero view e gruppi.
     uiState.collapseAll(ui.knownIds);
-    // Le modifiche di massa passano dal re-render, che riallinea gli attributi
-    // via syncGroupStates senza ricostruire le righe.
     scheduleRender();
   });
 
@@ -653,6 +798,11 @@ function bindToolbar() {
         totalEvents: store.events.length,
         activeFilters: filters.rules,
         searchQuery: search.query || null,
+        // Il mapper è contesto utile per rileggere un export a distanza di
+        // tempo: senza, le eVar restano numeri senza significato.
+        eddlMapper: ui.mapper
+          ? { sourceElement: ui.mapper.sourceElement, entries: ui.mapper.entries, map: ui.mapper.map }
+          : null,
         events: store.events.map(({ __id, __live, ...rest }) => rest)
       };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -699,8 +849,8 @@ function bindToolbar() {
   });
   $('#cookies-close').addEventListener('click', () => { $('#cookies-drawer').hidden = true; });
 
-  // Stop navigazione: declarativeNetRequest è obbligatorio nel manifest (Chrome
-  // non lo ammette tra i permessi opzionali), quindi nessuna richiesta.
+  // Stop navigazione: declarativeNetRequest è obbligatorio nel manifest, quindi
+  // nessuna richiesta di permesso.
   $('#btn-stopnav').addEventListener('click', async () => {
     const btn = $('#btn-stopnav');
     const on = btn.getAttribute('aria-pressed') !== 'true';
@@ -768,6 +918,13 @@ window.__uadOnDevtoolsMessage = (msg) => {
           if (!$('#cookies-drawer').hidden) cookiesMod.load();
           else if (ui.settings.features?.cookieCrossCheck) cookiesMod.loadIdentityOnly();
         }
+        // Il mapper appartiene al documento precedente: il nuovo lo ripubblica
+        // se lo trova. Tenerlo mostrerebbe mappature di un'altra pagina.
+        if (ui.mapper) {
+          ui.mapper = null;
+          ui.mapperVersion++;
+          renderMapbar();
+        }
         break;
     }
   } catch (e) { console.error('[Sniffer panel] onDevtoolsMessage', e); }
@@ -791,17 +948,19 @@ window.__uadOnDevtoolsMessage = (msg) => {
 
   bindToolbar();
   bindDelegation();
+  bindMapbar();
   connectPort();
 
   // 1. Settings PRIMA di tutto: tema e visibilità icone dipendono da loro.
   await loadSettings();
   theme.init(ui.settings);
 
-  // 2. Stato accordion e filtri persistiti, PRIMA del primo render: altrimenti
-  //    si vede un frame con i default e poi un salto.
+  // 2. Stato accordion, filtri e toggle mapper persistiti, PRIMA del primo
+  //    render: altrimenti si vede un frame con i default e poi un salto.
   await uiState.hydrate();
   uiState.subscribe(scheduleRender);
   await filters.hydrate();
+  await loadMapperToggle();
 
   // 3. Moduli che dipendono dai settings caricati.
   settingsMod = initSettings({
@@ -831,8 +990,7 @@ window.__uadOnDevtoolsMessage = (msg) => {
     }
   });
 
-  // 4. Se il cross-check è attivo, l'indice serve subito: senza questo i marker
-  //    comparirebbero solo dopo aver aperto il drawer cookie.
+  // 4. Se il cross-check è attivo, l'indice serve subito.
   if (ui.settings.features?.cookieCrossCheck === true) {
     cookiesMod.loadIdentityOnly();
   }

@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    Analytics Sniffer — stile del pannello DevTools
-   v3: credit con tooltip, lista categorie, tab "stale", nota batch
+   v4: barra mapper EDDL, lista mappature, mappatura inline nelle righe
 
    PRINCIPI
    · Palette a grigi CALDI neutri: il nero puro su schermo affatica e appiattisce
@@ -569,9 +569,7 @@ button {
   opacity: .62;
   border-bottom-style: dashed;
 }
-.uad-tab.is-stale .uad-tab__dot {
-  background: var(--fg-faint);
-}
+.uad-tab.is-stale .uad-tab__dot { background: var(--fg-faint); }
 .uad-tab.is-stale.is-active {
   opacity: .85;
   border-bottom-color: var(--fg-faint);
@@ -643,7 +641,119 @@ button {
   text-underline-offset: 2px;
 }
 
-/* ─────────────────── 9. ACCORDION — LIVELLO 1: VIEW ─────────────────── */
+/* ─────────────────── 9. BARRA MAPPER EDDL ─────────────────── */
+
+/* Compare solo nelle tab Adobe e solo se il mapper è rilevato. Il mapper non è
+   un evento: è un metadato della pagina, quindi vive sopra la cronologia invece
+   di sporcarla come hit. */
+.uad-mapbar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 6px 6px 5px;
+  padding: 7px 10px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-raised));
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: var(--radius);
+  flex: 0 0 auto;
+}
+
+.uad-mapbar__icon { font-size: 13px; flex: 0 0 auto; }
+
+.uad-mapbar__txt {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.uad-mapbar__txt b { font-weight: 600; }
+
+.uad-mapbar__src {
+  color: var(--fg-faint);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.uad-mapbar__view {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+.uad-mapbar__view:hover { filter: brightness(1.15); }
+
+/* Il toggle è un'azione di lettura, non una configurazione: sta accanto ai dati
+   che modifica invece che nei Settings. */
+.uad-mapsw {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: var(--bg-hover);
+  font-size: 11px;
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .12s ease, color .12s ease;
+}
+.uad-mapsw:hover { filter: brightness(1.06); }
+
+.uad-mapsw.is-on {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.uad-mapsw input {
+  margin: 0;
+  width: 13px;
+  height: 13px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.uad-mapsw.is-on input { accent-color: var(--accent-fg); }
+
+/* Elenco completo delle mappature, collassato. Serve a verificare cosa il
+   mapper ha letto senza scorrere le hit. */
+.uad-maplist {
+  margin: 0 6px 6px;
+  padding: 8px 10px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  max-height: 190px;
+  overflow-y: auto;
+  flex: 0 0 auto;
+}
+
+.uad-maplist__row {
+  display: flex;
+  gap: 8px;
+  padding: 2.5px 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+.uad-maplist__row:last-child { border-bottom: none; }
+
+.uad-maplist__k {
+  flex: 0 0 72px;
+  color: var(--tool-color);
+  font-weight: 600;
+}
+
+.uad-maplist__v {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--fg-muted);
+  word-break: break-all;
+}
+
+/* ─────────────────── 10. ACCORDION — LIVELLO 1: VIEW ─────────────────── */
 
 .uad-view {
   margin: 0 6px 5px;
@@ -711,7 +821,7 @@ button {
 
 .uad-view__body { padding: 3px 0; }
 
-/* ─────────────────── 10. ACCORDION — LIVELLO 2: EVENTO ─────────────────── */
+/* ─────────────────── 11. ACCORDION — LIVELLO 2: EVENTO ─────────────────── */
 
 .uad-event {
   position: relative;
@@ -783,8 +893,8 @@ button {
   line-height: 1.5;
 }
 
-/* Nota informativa: meno enfasi dell'avviso. Usata per il batch, dove i delta
-   ms tra eventi non sono significativi perché sono partiti insieme. */
+/* Nota informativa: meno enfasi dell'avviso. Usata per il batch, dove i delta ms
+   tra eventi non sono significativi perché sono partiti insieme. */
 .uad-event__note {
   margin: 0 0 7px;
   padding: 5px 8px;
@@ -858,7 +968,7 @@ button {
   background: var(--accent-soft);
 }
 
-/* ─────────────────── 11. ACCORDION — LIVELLO 3: GRUPPO ─────────────────── */
+/* ─────────────────── 12. ACCORDION — LIVELLO 3: GRUPPO ─────────────────── */
 
 .uad-group { margin: 3px 0; }
 
@@ -906,7 +1016,7 @@ button {
 
 .uad-group__rows { display: flex; flex-direction: column; }
 
-/* ───────────────────────── 12. RIGHE KEY-VALUE ───────────────────────── */
+/* ───────────────────────── 13. RIGHE KEY-VALUE ───────────────────────── */
 
 .uad-row {
   display: flex;
@@ -930,6 +1040,36 @@ button {
   font-size: 11px;
   font-weight: 500;
   color: var(--tool-color);
+}
+
+/* ── Mappatura EDDL inline ──
+   Si inserisce tra chiave e valore. Il separatore "|" è in ::before, così il JS
+   scrive solo il testo senza comporre stringhe.
+   `flex: 0 1 auto` con ellipsis: se la mappatura è lunga si accorcia, e la
+   colonna dei valori resta allineata a destra — scorrere l'elenco non rallenta. */
+.uad-row__map {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg-faint);
+  cursor: help;
+}
+
+.uad-row__map::before {
+  content: '|';
+  margin-right: 5px;
+  color: var(--border-strong);
+}
+
+/* Variabile riconosciuta ma assente dal mapper. Distinguere questo caso da
+   "mapper spento" evita di far credere che il toggle non funzioni. */
+.uad-row__map[data-none='true'] {
+  opacity: .45;
+  font-style: italic;
 }
 
 .uad-row__info {
@@ -984,7 +1124,7 @@ button {
   padding: 0 1px;
 }
 
-/* ───────────────────────── 13. PRODOTTI ───────────────────────── */
+/* ───────────────────────── 14. PRODOTTI ───────────────────────── */
 
 .uad-event__products {
   margin-top: 7px;
@@ -1024,7 +1164,7 @@ button {
 
 .uad-product__rows { padding: 2px 5px; }
 
-/* ───────────────────────── 14. DRAWER ───────────────────────── */
+/* ───────────────────────── 15. DRAWER ───────────────────────── */
 
 .uad-drawer {
   position: fixed;
@@ -1100,7 +1240,7 @@ button {
   flex: 0 0 auto;
 }
 
-/* ───────────────────── 15. SEZIONI E CONTROLLI ───────────────────── */
+/* ───────────────────── 16. SEZIONI E CONTROLLI ───────────────────── */
 
 .uad-section { margin-bottom: 24px; }
 .uad-section:last-of-type { margin-bottom: 12px; }
@@ -1168,6 +1308,9 @@ button {
 /* Permesso mancante: la nota diventa un avviso. */
 .uad-switch[data-permission='missing'] .uad-switch__note { color: var(--warn); }
 
+/* Icona di una feature spenta: non ha nulla da mostrare. */
+.uad-switch[data-inactive='true'] { opacity: .5; }
+
 .uad-switch--inline {
   display: inline-flex;
   align-items: center;
@@ -1218,7 +1361,7 @@ button {
   color: var(--fg-muted);
 }
 
-/* ───────────────────── 16. LISTA TOOL (drag) ───────────────────── */
+/* ───────────────────── 17. LISTA TOOL (drag) ───────────────────── */
 
 .uad-tool-list {
   list-style: none;
@@ -1268,7 +1411,7 @@ button {
   white-space: nowrap;
 }
 
-/* ───────────────── 17. LISTA CATEGORIE (sezioni dei campi) ───────────────── */
+/* ───────────── 18. LISTA CATEGORIE (sezioni dei campi) ───────────── */
 
 .uad-catlist {
   display: flex;
@@ -1319,7 +1462,7 @@ button {
 .uad-cat-item[data-unseen='true'] { opacity: .45; }
 .uad-cat-item[data-unseen='true']:hover { opacity: .75; }
 
-/* ───────────────────── 18. SEGMENTED CONTROL ───────────────────── */
+/* ───────────────────── 19. SEGMENTED CONTROL ───────────────────── */
 
 .uad-segmented {
   display: inline-flex;
@@ -1350,7 +1493,7 @@ button {
 /* L'unico livello distruttivo del clear: colorato solo quando selezionato. */
 .uad-segmented__btn--danger.is-active { color: var(--err); }
 
-/* ───────────────────── 19. COOKIE ───────────────────── */
+/* ───────────────────── 20. COOKIE ───────────────────── */
 
 .uad-cookie-list {
   display: flex;
@@ -1410,7 +1553,7 @@ button {
 .uad-cookie__del:focus-visible { opacity: 1; }
 .uad-cookie__del:hover { color: var(--err); }
 
-/* ───────────────────── 20. CREDIT ───────────────────── */
+/* ───────────────────── 21. CREDIT ───────────────────── */
 
 .uad-credit {
   display: flex;
@@ -1470,7 +1613,7 @@ button {
   transform: translateY(0);
 }
 
-/* ───────────────────── 21. FLOTTANTI ───────────────────── */
+/* ───────────────────── 22. FLOTTANTI ───────────────────── */
 
 /* Badge nuovi match: non scrolla mai da sé, il salto avviene solo su clic.
    Rubare lo scroll a chi legge un payload rende inutile un debugger. */
@@ -1555,7 +1698,7 @@ button {
 .uad-banner__action:hover { filter: brightness(1.08); }
 .uad-banner .uad-icon-btn { color: var(--warn); }
 
-/* ───────────────────── 22. RESPONSIVE ───────────────────── */
+/* ───────────────────── 23. RESPONSIVE ───────────────────── */
 
 /* Pannello ancorato in basso ma non larghissimo. */
 @media (max-width: 860px) {
@@ -1571,6 +1714,10 @@ button {
   .uad-view__time       { display: none; }
   .uad-toolbar          { gap: 6px; padding: 0 6px; }
   .uad-toolbar__group--search { order: 3; flex-basis: 100%; }
+
+  /* La barra mapper va su due righe: il toggle resta raggiungibile. */
+  .uad-mapbar { flex-wrap: wrap; }
+  .uad-mapbar__txt { flex-basis: 100%; }
 }
 
 /* Molto stretto: toolbar su due righe, chiave e valore impilati. */
@@ -1582,15 +1729,22 @@ button {
   }
   .uad-toolbar__group--optional { margin-left: 0; }
   .uad-event__delta   { display: none; }
+
   .uad-row            { flex-wrap: wrap; }
   .uad-row__key       { max-width: 100%; }
+  /* La mappatura va a capo sotto la chiave e perde il separatore: in verticale
+     un "|" iniziale sarebbe fuori posto. */
+  .uad-row__map       { flex-basis: 100%; padding-left: 2px; }
+  .uad-row__map::before { content: '↳'; margin-right: 4px; }
   .uad-row__value     { flex-basis: 100%; padding-left: 0; }
+
   .uad-group__name    { font-size: 10px; }
   .uad-drawer         { width: 100vw; }
   .uad-credit__tip    { white-space: normal; width: 180px; }
+  .uad-maplist__k     { flex-basis: 58px; }
 }
 
-/* ───────────────────── 23. ACCESSIBILITÀ ───────────────────── */
+/* ───────────────────── 24. ACCESSIBILITÀ ───────────────────── */
 
 /* Chi ha impostato "riduci animazioni" non deve vedere pulse e slide, ma
    l'INFORMAZIONE resta: il pulse animato diventa un bordo statico, così si
@@ -1624,4 +1778,6 @@ button {
   .uad-group__head[data-default-open='false'] .uad-group__name { color: var(--fg-muted); }
   .uad-cat-item[data-unseen='true'] { opacity: .7; }
   .uad-tab.is-stale { opacity: .8; }
+  /* La mappatura "non mappata" deve restare leggibile. */
+  .uad-row__map[data-none='true'] { opacity: .7; }
 }

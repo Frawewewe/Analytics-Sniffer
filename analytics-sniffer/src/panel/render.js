@@ -2,22 +2,18 @@
  * Analytics Sniffer — rendering degli accordion
  * Contesto: pagina di estensione (panel), ES module
  *
- * v4 — CORREZIONE del bug "i sotto-accordion non si aprono".
+ * v5 — mappatura EDDL inline accanto alle chiavi eVar/prop.
  *
- * COSA ERA ROTTO
- * Il corpo di un evento si ricostruisce solo se cambia la sua firma
- * (data-built). Cliccando un gruppo, lo stato in state.js cambiava
- * correttamente ma la firma no: buildEventBody non veniva richiamato e il DOM
- * del gruppo restava identico. Il click funzionava, semplicemente non si vedeva.
- * In più, le righe di un gruppo chiuso non venivano costruite, quindi anche
- * forzando il re-render il gruppo si sarebbe aperto vuoto.
+ * Il pannello fornisce mapperFor(varName), che restituisce tre valori distinti:
+ *   null            non applicabile — toggle spento, tab non Adobe, oppure la
+ *                   chiave non è una variabile Adobe
+ *   stringa vuota   variabile riconosciuta ma ASSENTE dal mapper
+ *   stringa         la mappatura
  *
- * COME È RISOLTO
- * Le righe di un gruppo vengono SEMPRE costruite: la visibilità è governata
- * solo da `hidden`. Aprire e chiudere un gruppo diventa quindi una modifica di
- * un attributo, che panel.js applica immediatamente al DOM senza attendere un
- * re-render. Il costo è accettabile perché il gate pesante resta a livello di
- * evento: il corpo si costruisce solo quando l'evento è aperto.
+ * Il caso intermedio esiste per una ragione precisa: se una eVar non è nel
+ * mapper e non mostrassimo nulla, l'utente penserebbe che il toggle non funzioni
+ * su quella riga. Mostrando "non mappata" attenuato, distingue "assente dal
+ * mapper" da "mapper spento".
  *
  * PRINCIPIO: RENDERING PURO
  * Questo modulo NON prende decisioni e NON registra listener. Riceve dati più
@@ -26,9 +22,14 @@
  * significherebbe migliaia di closure ricreate a ogni render.
  *
  * SICUREZZA
- * Solo textContent, mai innerHTML. I valori del dataLayer possono contenere
- * HTML arbitrario. L'unica costruzione di nodi è quella dei <mark> per
+ * Solo textContent, mai innerHTML. I valori del dataLayer possono contenere HTML
+ * arbitrario. L'unica costruzione di nodi è quella dei <mark> per
  * l'evidenziazione, fatta programmaticamente.
+ *
+ * PERFORMANCE
+ * Le righe di un gruppo si costruiscono SEMPRE, anche a gruppo chiuso: aprire un
+ * gruppo diventa `hidden = false`, che panel.js applica direttamente al DOM. Il
+ * gate pesante resta a livello di evento, il cui corpo è lazy.
  */
 
 'use strict';
@@ -37,9 +38,9 @@
    1. ORDINE DELLE CATEGORIE — COSA prima, COME dopo
    ═══════════════════════════════════════════════════════════════════════════
 
-   Il criterio: chi apre un evento vuole sapere PRIMA cosa è stato misurato
-   (nome evento, parametri, prodotti, eVars), e solo DOPO come è stato spedito
-   (identity, consenso, configurazione, endpoint).
+   Chi apre un evento vuole sapere PRIMA cosa è stato misurato (nome evento,
+   parametri, prodotti, eVars), e solo DOPO come è stato spedito (identity,
+   consenso, configurazione, endpoint).
 
    Le categorie non elencate finiscono nella fascia UNKNOWN, cioè subito prima
    del blocco tecnico: un connettore nuovo resta leggibile senza modifiche qui.
@@ -73,8 +74,6 @@ const CATEGORY_ORDER = [
 
   /* ── diagnostica: va vista, ma dopo i dati ───────────────────────────── */
   'Diagnostica',
-  'Mapper',
-  'Mappature',
   'Non inviate (fuori da linkTrackVars)',
 
   /* ── il COME: identità, consenso, configurazione ─────────────────────── */
@@ -182,8 +181,8 @@ export function setTextHighlighted(el, text, needle) {
   el.textContent = '';
   let from = 0, count = 0, guard = 0;
 
-  // Il guard evita il loop patologico su una ricerca di un solo carattere
-  // dentro un valore molto lungo.
+  // Il guard evita il loop patologico su una ricerca di un solo carattere dentro
+  // un valore molto lungo.
   while (guard++ < 200) {
     const at = hay.indexOf(nee, from);
     if (at === -1) break;
@@ -207,13 +206,16 @@ export function setTextHighlighted(el, text, needle) {
  *   toolMeta(id)          -> { label, color }
  *   state                 -> istanza di createState()
  *   categoryOpen(cat)     -> boolean: stato INIZIALE della categoria (Settings)
+ *   mapperFor(varName)    -> string | '' | null   mappatura EDDL (opzionale)
  *   crossCheck(key,value) -> { ok, message } | null   (opzionale)
  */
 export function createRenderer(deps) {
   const { toolMeta, state } = deps;
   const crossCheck = deps.crossCheck || (() => null);
-  // Se il pannello non fornisce la funzione, tutte le categorie nascono aperte.
+  // Se il pannello non fornisce le funzioni, i default sono innocui: tutte le
+  // categorie aperte e nessuna mappatura.
   const categoryOpen = deps.categoryOpen || (() => true);
+  const mapperFor = deps.mapperFor || (() => null);
 
   /* ─────────────────────── raggruppamento per view ─────────────────────── */
 
@@ -352,21 +354,23 @@ export function createRenderer(deps) {
       /**
        * Firma del contenuto: ricostruiamo solo quando cambia qualcosa che lo
        * altera davvero.
-       *   showAll            -> mostra/nasconde i campi vuoti
-       *   search             -> evidenziazione dei match
-       *   crossCheckVersion  -> l'indice identity dai cookie è arrivato
-       *   catVersion         -> lo stato iniziale delle categorie è cambiato
+       *   showAll            mostra/nasconde i campi vuoti
+       *   search             evidenziazione dei match
+       *   crossCheckVersion  l'indice identity dai cookie è arrivato
+       *   catVersion         lo stato iniziale delle categorie è cambiato
+       *   mapperVersion      il toggle o la mappa EDDL sono cambiati
        *
        * NOTA: lo stato aperto/chiuso dei singoli GRUPPI non è nella firma, e non
-       * deve esserci. I gruppi si aprono e chiudono cambiando `hidden`, cosa che
-       * panel.js fa direttamente sul DOM: rimetterli nella firma significherebbe
-       * ricostruire 200 righe a ogni click su un sotto-accordion.
+       * deve esserci. I gruppi si aprono cambiando `hidden`, cosa che panel.js
+       * fa direttamente: rimetterli nella firma significherebbe ricostruire 200
+       * righe a ogni click su un sotto-accordion.
        */
       const sig = [
         ctx.showAll ? 1 : 0,
         ctx.search || '',
         ctx.crossCheckVersion || 0,
-        ctx.catVersion || 0
+        ctx.catVersion || 0,
+        ctx.mapperVersion || 0
       ].join('|');
 
       if (body.dataset.built !== sig) {
@@ -448,8 +452,8 @@ export function createRenderer(deps) {
     products.textContent = '';
     products.hidden = true;
 
-    /* 1. Avviso in cima: "nessuna hit di rete osservata" è la diagnosi più
-          utile del tool, quindi non va cercata tra i campi. */
+    /* 1. Avviso in cima: "nessuna hit di rete osservata" è la diagnosi più utile
+          del tool, quindi non va cercata tra i campi. */
     const warning = ev.meta && ev.meta.warning;
     if (warning) {
       warn.textContent = '⚠ ' + warning;
@@ -459,8 +463,8 @@ export function createRenderer(deps) {
     }
 
     /* 2. Nota sul batch: gli eventi batchati sono partiti nello stesso istante,
-          quindi i delta ms tra loro non riflettono momenti di chiamata
-          distinti. Va detto, o si deduce una cronologia inesistente. */
+          quindi i delta ms tra loro non riflettono momenti di chiamata distinti.
+          Va detto, o si deduce una cronologia inesistente. */
     if (ev.meta && ev.meta.batch) {
       const note = document.createElement('p');
       note.className = 'uad-event__note';
@@ -547,14 +551,11 @@ export function createRenderer(deps) {
     /**
      * Le righe si costruiscono SEMPRE, anche a gruppo chiuso.
      *
-     * È la correzione del bug: se le costruissimo solo quando aperto, il click
-     * sul gruppo dovrebbe innescare un re-render dell'intero corpo dell'evento
-     * per popolarlo — e quel re-render non avviene, perché la firma del corpo
-     * non cambia. Costruendole sempre, aprire un gruppo è solo `hidden = false`,
-     * che panel.js applica direttamente e istantaneamente.
-     *
-     * Il costo è contenuto: il gate pesante resta a livello di evento, e il
-     * corpo si costruisce solo quando l'evento è aperto.
+     * Se le costruissimo solo quando aperto, il click sul gruppo dovrebbe
+     * innescare un re-render dell'intero corpo dell'evento per popolarlo — e
+     * quel re-render non avviene, perché la firma del corpo non cambia.
+     * Costruendole sempre, aprire un gruppo è solo `hidden = false`, che
+     * panel.js applica direttamente e istantaneamente.
      */
     const wrap = el.querySelector('[data-rows]');
     for (const r of rows) {
@@ -574,6 +575,37 @@ export function createRenderer(deps) {
     el.dataset.keyName = r.key;
     setTextHighlighted(el.querySelector('[data-key]'), r.key, ctx.search);
 
+    /**
+     * Mappatura EDDL, tra chiave e valore.
+     *
+     * mapperFor() restituisce tre valori distinti:
+     *   null    non applicabile — toggle spento, tab non Adobe, o chiave che non
+     *           è una variabile Adobe
+     *   ''      variabile riconosciuta ma ASSENTE dal mapper
+     *   stringa la mappatura
+     *
+     * Il caso '' produce "non mappata" attenuato: senza distinguerlo da null,
+     * l'utente non saprebbe se il toggle non funziona su quella riga o se la
+     * variabile semplicemente non è nel mapper.
+     */
+    const mapping = mapperFor(r.key);
+    if (mapping !== null && mapping !== undefined) {
+      const mapEl = el.querySelector('[data-map]');
+      if (mapEl) {
+        if (mapping === '') {
+          mapEl.textContent = 'non mappata';
+          mapEl.dataset.none = 'true';
+          mapEl.title = r.key + ' non è presente nel mapper EDDL rilevato';
+        } else {
+          // La mappatura è cercabile: evidenziamo anche qui i match.
+          setTextHighlighted(mapEl, mapping, ctx.search);
+          delete mapEl.dataset.none;
+          mapEl.title = r.key + ' → ' + mapping;
+        }
+        mapEl.hidden = false;
+      }
+    }
+
     const text = displayValue(r.value);
     const valEl = el.querySelector('[data-value]');
     setTextHighlighted(valEl, text, ctx.search);
@@ -582,8 +614,7 @@ export function createRenderer(deps) {
     valEl.dataset.copy = text;
 
     // `src` = nome della variabile sorgente. Lo conosce solo l'hook: la rete
-    // riceve i parametri già mappati e non può saperlo. Con il mapper Adobe
-    // attivo, qui compare il nome umano della variabile.
+    // riceve i parametri già mappati e non può saperlo.
     if (r.src) {
       const info = el.querySelector('[data-info]');
       info.hidden = false;
@@ -698,8 +729,8 @@ export function createRenderer(deps) {
   /**
    * @returns {{views:number, events:number, ids:string[]}}
    *   `ids` = tutti gli id di accordion presenti. Serve a collapseAll, che ha
-   *   bisogno di deviazioni esplicite e non di svuotare lo stato, e alla
-   *   garbage collection di state.js.
+   *   bisogno di deviazioni esplicite e non di svuotare lo stato, e alla garbage
+   *   collection di state.js.
    */
   function renderPane(container, events, ctx) {
     const groups = groupByView(events);
@@ -740,15 +771,14 @@ export function createRenderer(deps) {
   /* ───────────────────────── match per la ricerca ───────────────────────── */
 
   /**
-   * Elementi che contengono un match, in ordine di documento. Usati dalle
-   * frecce prev/next della ricerca. I <mark> dentro gruppi chiusi vengono
-   * esclusi: puntare a un match invisibile porterebbe su un nodo vuoto.
+   * Elementi che contengono un match, in ordine di documento. Usati dalle frecce
+   * prev/next della ricerca. I <mark> dentro gruppi chiusi vengono esclusi:
+   * puntare a un match invisibile porterebbe su un nodo vuoto.
    */
   function collectMatches(container) {
     const seen = new Set();
     const out = [];
     for (const m of container.querySelectorAll('mark')) {
-      // Un match dentro un gruppo chiuso non è raggiungibile: lo saltiamo.
       const gBody = m.closest('.uad-group__body');
       if (gBody && gBody.hidden) continue;
       const host = m.closest('.uad-event') || m.closest('.uad-view');

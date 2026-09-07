@@ -157,6 +157,40 @@
      ═══════════════════════════════════════════════════════════════════════ -->
 <main class="uad-main" id="main">
 
+  <!-- ─────────────────────────────────────────────────────────────────────
+       BARRA MAPPER EDDL
+
+       Compare SOLO nelle tab Adobe e SOLO se il mapper viene rilevato.
+       Il mapper non è un evento: è un metadato della pagina, quindi vive qui
+       sopra la cronologia invece di sporcarla come hit.
+
+       Il toggle è un'azione di lettura, non una configurazione: si cambia
+       spesso mentre si guardano le hit, e sta accanto ai dati che modifica.
+       Viene comunque ricordato tra le sessioni.
+       ───────────────────────────────────────────────────────────────────── -->
+  <div class="uad-mapbar" id="mapbar" hidden>
+    <span class="uad-mapbar__icon" aria-hidden="true">🗺️</span>
+    <span class="uad-mapbar__txt">
+      <b id="mapbar-title">Mapper EDDL rilevato</b><br>
+      <span class="uad-mapbar__src" id="mapbar-src"></span>
+    </span>
+    <button type="button" class="uad-mapbar__view" id="mapbar-list-btn"
+            aria-expanded="false" aria-controls="mapbar-list">vedi mappature</button>
+    <label class="uad-mapsw" id="mapbar-sw">
+      <input type="checkbox" id="mapbar-toggle">
+      <span id="mapbar-sw-label">mostra mappature</span>
+    </label>
+  </div>
+
+  <div class="uad-maplist" id="mapbar-list" hidden></div>
+
+  <template id="tpl-map-row">
+    <div class="uad-maplist__row">
+      <span class="uad-maplist__k" data-k></span>
+      <span class="uad-maplist__v" data-v></span>
+    </div>
+  </template>
+
   <div class="uad-empty" id="empty-no-tools">
     <p class="uad-empty__title">Nessun tool di analytics rilevato</p>
     <p class="uad-empty__text">
@@ -250,9 +284,14 @@
   </div>
 </template>
 
+<!-- La riga key-value ha quattro elementi in sequenza:
+     chiave · mappatura EDDL (opzionale) · info sorgente · cross-check · valore
+     La mappatura si inserisce tra chiave e valore: la colonna dei valori resta
+     allineata a destra, quindi scorrere l'elenco non rallenta. -->
 <template id="tpl-row">
   <div class="uad-row" data-key-name>
     <span class="uad-row__key" data-key></span>
+    <span class="uad-row__map" data-map hidden></span>
     <button type="button" class="uad-row__info" data-info hidden
             title="" aria-label="Variabile sorgente">ℹ</button>
     <span class="uad-row__link" data-crosscheck hidden title=""></span>
@@ -391,12 +430,12 @@
 
       <label class="uad-switch">
         <input type="checkbox" id="feat-adobeMapper" data-feature="adobeMapper">
-        <span class="uad-switch__label">Mapper eVar → nome umano (EDDL)</span>
+        <span class="uad-switch__label">🗺️ Mapper eVar → nome umano (EDDL)</span>
         <span class="uad-switch__note">
           Alcune implementazioni tengono in un data element la traduzione
-          <code>eVar1 → page.pageInfo.site_code</code>. Se la trova, mostra il
-          nome leggibile nel tooltip ℹ️ e lo rende cercabile: su 200 eVar fa
-          la differenza
+          <code>eVar1 → page.pageInfo.site_code</code>. Se la trova, compare una
+          barra in cima alla tab Adobe con un interruttore: attivandolo, accanto
+          a ogni eVar e prop vedi la mappatura corrispondente
         </span>
       </label>
     </section>

@@ -1,11 +1,20 @@
 /**
- * Universal Analytics Debugger — pannello Cookie
+ * Analytics Sniffer — pannello Cookie
  * Contesto: pagina di estensione (panel), ES module
+ *
+ * v2 — aggiunto loadIdentityOnly(): costruisce l'indice identity per il
+ *      cross-check SENZA toccare la UI del drawer.
+ *
+ * PERCHE SERVE
+ * Il cross-check cookie/hit marca le righe con 🔗 o ⚠️ confrontando cid,
+ * sessione ed ECID con i cookie. L'indice si costruiva solo dentro load(), che
+ * disegna anche la lista: quindi i marker comparivano soltanto dopo aver aperto
+ * il drawer. panel.js chiamava loadIdentityOnly() — che non esisteva.
  *
  * RESPONSABILITA
  *   - lista dei cookie del dominio ispezionato, HttpOnly inclusi
  *   - cancellazione a tre livelli, con clear + reload in un clic
- *   - cross-check identity: il cid nella hit corrisponde al cookie _ga?
+ *   - indice identity per il cross-check nelle righe degli eventi
  *
  * PERCHE PASSA DAL BACKGROUND
  * document.cookie non vede i cookie HttpOnly, e il pannello DevTools non ha
@@ -16,20 +25,17 @@
  * Cancellare i soli cookie spesso NON resetta l'utente: Adobe Web SDK tiene
  * l'ECID anche in localStorage (kndctr_*_identity, com.adobe.reactor.*), quindi
  * l'identity si rigenera identica e il clear sembra non aver funzionato.
- * Il livello "+ storage" svuota entrambi.
  *
  * IL VALORE DEL CROSS-CHECK
- * Il caso in cui i valori NON corrispondono e' quello che vale: significa
- * utente contato due volte, sessioni spezzate, attribuzione rotta. E' un bug
- * reale e difficilissimo da vedere a mano.
+ * Il caso in cui i valori NON corrispondono e' quello che vale: significa utente
+ * contato due volte, sessioni spezzate, attribuzione rotta. E' un bug reale e
+ * difficilissimo da vedere a mano.
  */
 
 'use strict';
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Pattern dei cookie di analytics
-   Allineati a quelli del background: qui servono per il filtro della UI e per
-   il raggruppamento per vendor.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const COOKIE_GROUPS = [
@@ -38,7 +44,8 @@ const COOKIE_GROUPS = [
   { vendor: 'Google Ads',         color: '#4285f4',
     patterns: [/^_gcl_/, /^_gac_/, /^_gcl_au$/] },
   { vendor: 'Adobe Analytics',    color: '#fa0f00',
-    patterns: [/^s_cc$/, /^s_sq$/, /^s_vi$/, /^s_fid$/, /^s_nr/, /^s_ppv$/, /^gpv/, /^s_depth$/] },
+    patterns: [/^s_cc$/, /^s_sq$/, /^s_vi$/, /^s_fid$/, /^s_nr/, /^s_ppv$/,
+               /^gpv/, /^s_depth$/] },
   { vendor: 'Adobe Identity',     color: '#c9252d',
     patterns: [/^AMCV_/, /^AMCVS_/, /^kndctr_/, /^demdex$/] },
   { vendor: 'Adobe Target',       color: '#e34850',
@@ -78,11 +85,11 @@ function isAnalyticsCookie(name) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Cross-check identity
+   Estrazione degli identificativi
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /**
- * Estrae il client ID dal cookie _ga.
+ * Client ID dal cookie _ga.
  * Formato: GA1.1.1575638140.1779280718 -> cid = "1575638140.1779280718"
  */
 function extractGaCid(value) {
@@ -96,16 +103,23 @@ function extractGaSession(value) {
   return m ? { sid: m[1], sct: m[2] } : null;
 }
 
-/** ECID dal cookie AMCV_ o kndctr_*_identity. */
+/**
+ * ECID dal cookie AMCV_ o kndctr_*_identity.
+ *
+ * LIMITE DICHIARATO: il formato di kndctr_*_identity non e' documentato da Adobe
+ * e cambia tra versioni del Web SDK. Tentiamo il base64, poi cerchiamo una
+ * sequenza numerica lunga. Se non troviamo nulla il cross-check ECID
+ * semplicemente non compare, invece di dare un falso allarme.
+ */
 function extractEcid(name, value) {
   const v = String(value || '');
+
   if (/^AMCV_/.test(name)) {
-    // Formato: ...|MCMID|12345678901234567890|...
     const m = /MCMID\|(\d+)/.exec(v);
     if (m) return m[1];
   }
+
   if (/_identity$/.test(name)) {
-    // Base64 di un JSON con la chiave "ECID" o "id"
     try {
       const dec = atob(v.replace(/-/g, '+').replace(/_/g, '/'));
       const m = /"(?:ECID|id)"\s*:\s*"?(\d{15,})/.exec(dec);
@@ -114,12 +128,13 @@ function extractEcid(name, value) {
     const m2 = /(\d{18,})/.exec(v);
     if (m2) return m2[1];
   }
+
   return null;
 }
 
 /**
- * Costruisce l'indice identity dai cookie: viene passato al renderer degli
- * eventi, che marca 🔗 o ⚠️ sulle righe corrispondenti.
+ * Indice identity dai cookie. Viene passato al renderer degli eventi, che marca
+ * 🔗 o ⚠️ sulle righe corrispondenti.
  */
 function buildIdentityIndex(cookies) {
   const idx = { gaCid: null, gaSessions: {}, ecid: null, measurementIds: [] };
@@ -173,23 +188,24 @@ export function initCookies(ctx) {
   // ctx = { send, toast, banner, copyToClipboard, getSettings,
   //         requestPermissions, onIdentityIndex, tabId }
 
-  const $ = (s) => document.querySelector(s);
+  const $  = (s) => document.querySelector(s);
   const $$ = (s) => Array.from(document.querySelectorAll(s));
 
   const state = {
     cookies: [],
-    filter: 'analytics',   // 'analytics' | 'all'
-    clearMode: 'analytics',// 'analytics' | 'storage' | 'all'
+    filter: 'analytics',     // 'analytics' | 'all'
+    clearMode: 'analytics',  // 'analytics' | 'storage' | 'all'
     pageUrl: null,
-    loading: false
+    loading: false,
+    identityLoading: false
   };
 
   /* ───────────────────────── url della pagina ───────────────────────── */
 
   /**
-   * chrome.cookies richiede un url. Lo chiediamo alla pagina ispezionata:
-   * e' l'unico modo affidabile, perche il pannello non conosce l'url corrente
-   * dopo una navigazione SPA.
+   * chrome.cookies richiede un url. Lo chiediamo alla pagina ispezionata: e'
+   * l'unico modo affidabile, perche dopo una navigazione SPA il pannello non
+   * conosce l'url corrente e leggerebbe i cookie del dominio sbagliato.
    */
   function currentPageUrl() {
     return new Promise((resolve) => {
@@ -200,7 +216,7 @@ export function initCookies(ctx) {
           resolve(res);
         });
       } catch (e) {
-        console.error('[UAD cookies] currentPageUrl', e);
+        console.error('[Sniffer cookies] currentPageUrl', e);
         resolve(state.pageUrl);
       }
     });
@@ -208,46 +224,94 @@ export function initCookies(ctx) {
 
   /* ─────────────────────────── caricamento ─────────────────────────── */
 
-  async function load() {
-    if (state.loading) return;
-    state.loading = true;
-
+  /**
+   * Legge i cookie dal background e pubblica l'indice identity.
+   * @returns {Promise<{ok:boolean, cookies?:Array, error?:string, needsPermission?:boolean}>}
+   */
+  async function fetchCookies() {
     const url = await currentPageUrl();
-    if (!url) {
-      renderMessage('URL della pagina non disponibile: ricarica la pagina ispezionata.');
-      state.loading = false;
-      return;
-    }
-
-    $('#cookies-domain').textContent = (() => {
-      try { return new URL(url).hostname; } catch { return url; }
-    })();
+    if (!url) return { ok: false, error: 'url della pagina non disponibile' };
 
     const r = await ctx.send({ type: 'uad:listCookies', url });
-    state.loading = false;
+    if (!r.ok) return r;
 
-    if (!r.ok) {
-      if (r.needsPermission) {
-        renderMessage('Il permesso "cookies" non è concesso.', 'Concedi permesso',
-          () => ctx.requestPermissions('cookieInspector'));
-        return;
-      }
-      renderMessage('Lettura dei cookie non riuscita: ' + (r.error || 'errore ignoto'));
-      return;
-    }
-
-    state.cookies = (r.cookies || []).sort((a, b) => {
-      // Analytics prima, poi alfabetico: e' cio che si cerca.
+    // Analytics prima, poi alfabetico: e' cio che si cerca.
+    const cookies = (r.cookies || []).sort((a, b) => {
       const av = isAnalyticsCookie(a.name) ? 0 : 1;
       const bv = isAnalyticsCookie(b.name) ? 0 : 1;
       return av !== bv ? av - bv : a.name.localeCompare(b.name);
     });
 
-    // L'indice identity va al renderer degli eventi per il cross-check.
-    const idx = buildIdentityIndex(state.cookies);
-    ctx.onIdentityIndex && ctx.onIdentityIndex(idx);
+    state.cookies = cookies;
 
-    render();
+    // L'indice va al renderer degli eventi per il cross-check.
+    if (ctx.onIdentityIndex) ctx.onIdentityIndex(buildIdentityIndex(cookies));
+
+    return { ok: true, cookies, url };
+  }
+
+  /**
+   * Carica SOLO l'indice identity, senza toccare la UI del drawer.
+   *
+   * Chiamata da panel.js quando il cross-check e' attivo: al boot, quando lo
+   * attivi dai Settings, e dopo ogni navigazione. Senza questo i marker 🔗/⚠️
+   * comparirebbero soltanto dopo aver aperto il drawer cookie.
+   *
+   * Silenziosa per costruzione: se il permesso manca non mostra banner ne
+   * toast. Sarebbe intrusivo interrompere l'utente per una funzione di
+   * arricchimento che non ha richiesto in quel momento.
+   */
+  async function loadIdentityOnly() {
+    if (state.identityLoading) return false;
+
+    // Il cross-check dipende dallo stesso permesso dell'inspector: se non c'e',
+    // non ha senso provare.
+    const feats = (ctx.getSettings && ctx.getSettings().features) || {};
+    if (feats.cookieCrossCheck !== true) return false;
+
+    state.identityLoading = true;
+    try {
+      const r = await fetchCookies();
+      if (!r.ok) {
+        // Log, non banner: e' un caricamento in background.
+        console.warn('[Sniffer cookies] indice identity non disponibile:', r.error || 'permesso mancante');
+        return false;
+      }
+      // Se il drawer e' aperto, la lista va aggiornata con i dati appena letti.
+      if (!$('#cookies-drawer').hidden) render();
+      return true;
+    } finally {
+      state.identityLoading = false;
+    }
+  }
+
+  /** Caricamento completo: legge i cookie e disegna la lista. */
+  async function load() {
+    if (state.loading) return;
+    state.loading = true;
+
+    try {
+      const url = await currentPageUrl();
+      $('#cookies-domain').textContent = (() => {
+        try { return new URL(url).hostname; } catch { return url || ''; }
+      })();
+
+      const r = await fetchCookies();
+
+      if (!r.ok) {
+        if (r.needsPermission) {
+          renderMessage('Il permesso "cookies" non è concesso.', 'Concedi permesso',
+            () => ctx.requestPermissions('cookieInspector'));
+          return;
+        }
+        renderMessage('Lettura dei cookie non riuscita: ' + (r.error || 'errore ignoto'));
+        return;
+      }
+
+      render();
+    } finally {
+      state.loading = false;
+    }
   }
 
   /* ─────────────────────────── rendering ─────────────────────────── */
@@ -284,10 +348,11 @@ export function initCookies(ctx) {
       return;
     }
 
+    const tplEl = document.getElementById('tpl-cookie');
+    if (!tplEl) { console.error('[Sniffer cookies] template tpl-cookie mancante'); return; }
+
     for (const c of shown) {
-      const el = document.getElementById('tpl-cookie')
-        ?.content.firstElementChild.cloneNode(true);
-      if (!el) continue;
+      const el = tplEl.content.firstElementChild.cloneNode(true);
 
       const g = vendorOf(c.name);
       el.dataset.name = c.name;
@@ -301,7 +366,10 @@ export function initCookies(ctx) {
       valEl.textContent = truncate(c.value, 120);
       valEl.addEventListener('click', () => ctx.copyToClipboard(c.value, 'Valore copiato'));
       valEl.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ctx.copyToClipboard(c.value, 'Valore copiato'); }
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          ctx.copyToClipboard(c.value, 'Valore copiato');
+        }
       });
 
       el.querySelector('[data-cookie-domain]').textContent = c.domain;
@@ -316,20 +384,23 @@ export function initCookies(ctx) {
       }
       if (c.partitionKey) el.querySelector('[data-flag-partitioned]').hidden = false;
 
-      // Valori decodificati: cid, session, ECID mostrati in chiaro.
+      // Valore interpretato: cid, sessione, ECID in chiaro. Il valore grezzo
+      // GA1.1.1575638140.1779280718 non dice nulla; "cid 1575638140.1779280718"
+      // e' confrontabile a vista con la hit.
       const decoded = decodeCookie(c);
       if (decoded) {
-        const meta = el.querySelector('.uad-cookie__meta');
         const tag = document.createElement('span');
         tag.className = 'uad-tag uad-tag--decoded';
         tag.textContent = decoded;
         tag.title = 'valore interpretato';
-        meta.appendChild(tag);
+        el.querySelector('.uad-cookie__meta').appendChild(tag);
       }
 
       el.querySelector('[data-cookie-delete]').addEventListener('click', async () => {
         const url = await currentPageUrl();
-        const r = await ctx.send({ type: 'uad:clearCookies', url, mode: 'named', names: [c.name] });
+        const r = await ctx.send({
+          type: 'uad:clearCookies', url, mode: 'named', names: [c.name]
+        });
         if (r.ok && r.removed) { ctx.toast('Cookie ' + c.name + ' cancellato'); load(); }
         else ctx.toast('Cancellazione non riuscita' + (r.error ? ': ' + r.error : ''));
       });
@@ -355,8 +426,11 @@ export function initCookies(ctx) {
   /* ───────────────────────────── clear ───────────────────────────── */
 
   /**
-   * Il livello "+ storage" tocca anche localStorage/sessionStorage: senza
+   * Il livello "+ storage" tocca anche localStorage e sessionStorage: senza
    * questo l'identity Adobe si rigenera identica e il clear sembra inefficace.
+   *
+   * I pattern vengono serializzati e ricostruiti dentro la pagina, cosi l'elenco
+   * vive in un solo posto invece di essere duplicato nel codice iniettato.
    */
   function clearStorageInPage() {
     const patterns = STORAGE_IDENTITY_PATTERNS.map(r => r.source).join('|');
@@ -381,11 +455,11 @@ export function initCookies(ctx) {
     return new Promise((resolve) => {
       try {
         chrome.devtools.inspectedWindow.eval(code, (res, exc) => {
-          if (exc) { console.error('[UAD cookies] clearStorage', exc); resolve([]); return; }
+          if (exc) { console.error('[Sniffer cookies] clearStorage', exc); resolve([]); return; }
           resolve(Array.isArray(res) ? res : []);
         });
       } catch (e) {
-        console.error('[UAD cookies] clearStorage eval', e);
+        console.error('[Sniffer cookies] clearStorage eval', e);
         resolve([]);
       }
     });
@@ -395,7 +469,9 @@ export function initCookies(ctx) {
     const url = await currentPageUrl();
     if (!url) { ctx.toast('URL non disponibile'); return; }
 
-    // Solo il livello "all" e' distruttivo: ti disconnette dal sito.
+    // Solo il livello "all" e' distruttivo: chiedere conferma su azioni innocue
+    // insegna a cliccare Ok senza leggere, e poi la conferma che conta viene
+    // ignorata.
     if (state.clearMode === 'all') {
       const host = (() => { try { return new URL(url).hostname; } catch { return url; } })();
       if (!confirm(`Cancellare TUTTI i cookie di ${host}?\n\nVerrai disconnesso dal sito.`)) return;
@@ -407,7 +483,7 @@ export function initCookies(ctx) {
     if (!r.ok) {
       if (r.needsPermission) {
         ctx.banner('Il permesso "cookies" non è concesso.', 'Concedi',
-          () => ctx.requestPermissions('cookieClear'));
+          () => ctx.requestPermissions('cookieInspector'));
         return;
       }
       ctx.toast('Cancellazione non riuscita: ' + (r.error || ''));
@@ -428,7 +504,7 @@ export function initCookies(ctx) {
       // Reload dopo un attimo: la conferma deve essere leggibile.
       setTimeout(() => {
         try { chrome.devtools.inspectedWindow.reload({}); }
-        catch (e) { console.error('[UAD cookies] reload', e); }
+        catch (e) { console.error('[Sniffer cookies] reload', e); }
       }, 400);
     } else {
       load();
@@ -456,14 +532,8 @@ export function initCookies(ctx) {
     $('#cookies-refresh')?.addEventListener('click', load);
     $('#cookies-clear')?.addEventListener('click', doClear);
 
-    // Il drawer legge i cookie solo quando viene aperto: nessuna lettura
-    // inutile mentre e' chiuso.
-    $('#btn-cookies')?.addEventListener('click', () => {
-      if (!$('#cookies-drawer').hidden) load();
-    });
-
-    // Navigazione della pagina: se il drawer e' aperto, i cookie possono essere
-    // cambiati.
+    // Navigazione della pagina: se il drawer e' aperto i cookie possono essere
+    // cambiati. panel.js emette questo evento.
     document.addEventListener('uad:cookies-refresh', () => {
       if (!$('#cookies-drawer').hidden) load();
     });
@@ -471,11 +541,19 @@ export function initCookies(ctx) {
 
   bind();
 
+  /* ─────────────────────────────── API ─────────────────────────────── */
+
   return {
     load,
+    loadIdentityOnly,
     isAnalyticsCookie,
     buildIdentityIndex,
-    /** Usato dal renderer degli eventi per marcare 🔗 / ⚠️ sulle righe. */
+
+    /**
+     * Confronta un valore di una hit con i cookie. Usato dal renderer per
+     * marcare 🔗 o ⚠️ sulle righe.
+     * @returns {{ok:boolean, message:string}|null}
+     */
     crossCheck(key, value, identityIndex) {
       if (!identityIndex) return null;
       const k = String(key || '').toLowerCase();
@@ -487,6 +565,7 @@ export function initCookies(ctx) {
           ? { ok: true,  message: `corrisponde al cookie _ga (${v})` }
           : { ok: false, message: `diverso dal cookie _ga (${identityIndex.gaCid}): possibile identity split` };
       }
+
       if (k === 'session id' || k === 'sid') {
         const sids = Object.values(identityIndex.gaSessions).map(s => s.sid);
         if (!sids.length) return null;
@@ -494,19 +573,29 @@ export function initCookies(ctx) {
           ? { ok: true,  message: 'corrisponde alla sessione nel cookie _ga_*' }
           : { ok: false, message: `sessione non presente nei cookie _ga_* (${sids.join(', ')})` };
       }
+
       if (k.includes('ecid') || k === 'mid' || k === 'marketing cloud id') {
         if (!identityIndex.ecid) return null;
         return identityIndex.ecid === v
           ? { ok: true,  message: 'corrisponde all\'ECID nei cookie Adobe' }
           : { ok: false, message: `diverso dall'ECID nei cookie (${identityIndex.ecid}): identity non allineata` };
       }
+
       if (k === 'measurement id' || k === 'tid') {
         if (!identityIndex.measurementIds.length) return null;
         return identityIndex.measurementIds.includes(v)
           ? { ok: true,  message: 'property corrispondente ai cookie presenti' }
           : { ok: false, message: `nessun cookie _ga_ per questa property (presenti: ${identityIndex.measurementIds.join(', ')})` };
       }
+
       return null;
-    }
+    },
+
+    debug: () => ({
+      cookies: state.cookies.length,
+      filter: state.filter,
+      clearMode: state.clearMode,
+      pageUrl: state.pageUrl
+    })
   };
 }
