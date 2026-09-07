@@ -10,7 +10,7 @@ Plugin architecture: to add a tool, copy src/main/connectors/_template.js and de
 
 **INSTALL**
 
-git clone https://github.com//analytics-sniffer.git
+git clone https://github.com/Frawewewe/Analytics-Sniffer.git
 
 Open chrome://extensions, enable Developer mode, click "Load unpacked" and select the folder. Requires Chrome 111+.
 
