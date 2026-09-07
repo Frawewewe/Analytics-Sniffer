@@ -2,33 +2,33 @@
  * Analytics Sniffer — rendering degli accordion
  * Contesto: pagina di estensione (panel), ES module
  *
- * v3 — tre modifiche:
- *   1. lo stato iniziale di ogni categoria arriva dai Settings tramite
- *      deps.categoryOpen(cat), invece di una regex fissa sul nome. L'utente
- *      decide quali sezioni nascono aperte.
- *   2. tab dei tool disattivati marcate "stale": con rilevamento automatico
- *      restano visibili (i dati raccolti sono consultabili) ma va dichiarato
- *      che non si aggiornano piu.
- *   3. crossCheckVersion nella firma di rendering: quando l'indice identity
- *      arriva dai cookie, i corpi degli eventi gia aperti si ricostruiscono e i
- *      marker 🔗/⚠️ compaiono senza dover richiudere e riaprire.
+ * v4 — CORREZIONE del bug "i sotto-accordion non si aprono".
+ *
+ * COSA ERA ROTTO
+ * Il corpo di un evento si ricostruisce solo se cambia la sua firma
+ * (data-built). Cliccando un gruppo, lo stato in state.js cambiava
+ * correttamente ma la firma no: buildEventBody non veniva richiamato e il DOM
+ * del gruppo restava identico. Il click funzionava, semplicemente non si vedeva.
+ * In più, le righe di un gruppo chiuso non venivano costruite, quindi anche
+ * forzando il re-render il gruppo si sarebbe aperto vuoto.
+ *
+ * COME È RISOLTO
+ * Le righe di un gruppo vengono SEMPRE costruite: la visibilità è governata
+ * solo da `hidden`. Aprire e chiudere un gruppo diventa quindi una modifica di
+ * un attributo, che panel.js applica immediatamente al DOM senza attendere un
+ * re-render. Il costo è accettabile perché il gate pesante resta a livello di
+ * evento: il corpo si costruisce solo quando l'evento è aperto.
  *
  * PRINCIPIO: RENDERING PURO
- * Questo modulo NON prende decisioni e NON registra listener. Riceve dati piu
+ * Questo modulo NON prende decisioni e NON registra listener. Riceve dati più
  * stato e produce DOM. Gli handler li aggancia panel.js per DELEGA su
- * contenitori stabili: con 2000 eventi x 3 livelli, un listener per nodo
+ * contenitori stabili: con 2000 eventi × 3 livelli, un listener per nodo
  * significherebbe migliaia di closure ricreate a ogni render.
  *
  * SICUREZZA
  * Solo textContent, mai innerHTML. I valori del dataLayer possono contenere
- * HTML arbitrario. L'unica costruzione di nodi e' quella dei <mark> per
+ * HTML arbitrario. L'unica costruzione di nodi è quella dei <mark> per
  * l'evidenziazione, fatta programmaticamente.
- *
- * PERFORMANCE
- * Il corpo di un evento si costruisce solo quando e' aperto, e si ricostruisce
- * solo se cambia qualcosa che ne altera il contenuto (data-built). I nodi
- * esistenti vengono riusati: ricreare tutto azzererebbe lo scroll e
- * interromperebbe le animazioni pulse in corso.
  */
 
 'use strict';
@@ -37,13 +37,12 @@
    1. ORDINE DELLE CATEGORIE — COSA prima, COME dopo
    ═══════════════════════════════════════════════════════════════════════════
 
-   Il criterio: chi apre un evento vuole sapere PRIMA cosa e' stato misurato
-   (nome evento, parametri, prodotti, eVars), e solo DOPO come e' stato spedito
+   Il criterio: chi apre un evento vuole sapere PRIMA cosa è stato misurato
+   (nome evento, parametri, prodotti, eVars), e solo DOPO come è stato spedito
    (identity, consenso, configurazione, endpoint).
 
-   Le categorie non elencate qui finiscono nella fascia UNKNOWN, cioe subito
-   prima del blocco tecnico: un connettore nuovo resta leggibile senza dover
-   modificare questo file.
+   Le categorie non elencate finiscono nella fascia UNKNOWN, cioè subito prima
+   del blocco tecnico: un connettore nuovo resta leggibile senza modifiche qui.
 
    NOTA: questo array governa solo l'ORDINE. Lo stato iniziale (aperta/chiusa)
    arriva dai Settings via deps.categoryOpen().
@@ -51,32 +50,34 @@
 
 const CATEGORY_ORDER = [
   /* ── il cuore dell'evento ────────────────────────────────────────────── */
-  'Evento',                       // generic-vendors: nome evento estratto
-  'Event Params',                 // GA4
-  'Parametri',                    // generic, template
-  'dataLayer',                    // GTM
-  'Ecommerce',                    // GTM
+  'Evento',
+  'Event Params',
+  'Parametri',
+  'dataLayer',
+  'Ecommerce',
   'Items',
-  'eVars',                        // Adobe AA / AEP
+  'eVars',
   'Props',
   'Events',
   'List Props',
   'List Vars',
   'Hierarchy',
-  'Commerce',                     // AEP
-  'Data (non-XDM)',               // AEP: forwarding lato datastream
+  'Commerce',
+  'Data (non-XDM)',
   'XDM custom',
 
   /* ── contesto della pagina ───────────────────────────────────────────── */
   'Web / Page',
   'Web / Link',
-  'Context Data',                 // Adobe AA
+  'Context Data',
 
   /* ── diagnostica: va vista, ma dopo i dati ───────────────────────────── */
   'Diagnostica',
+  'Mapper',
+  'Mappature',
   'Non inviate (fuori da linkTrackVars)',
 
-  /* ── il COME: identita, consenso, configurazione ─────────────────────── */
+  /* ── il COME: identità, consenso, configurazione ─────────────────────── */
   'User Properties',              // ← inizio fascia UNKNOWN
   'Identity',
   'Identity & Session',
@@ -167,7 +168,7 @@ export function isEmptyValue(v) {
 /**
  * Scrive `text` in `el` evidenziando le occorrenze di `needle`.
  * Costruisce nodi <mark> programmaticamente: nessun innerHTML, nessuna
- * possibilita di injection dai valori del dataLayer.
+ * possibilità di injection dai valori del dataLayer.
  * @returns {number} occorrenze evidenziate
  */
 export function setTextHighlighted(el, text, needle) {
@@ -205,7 +206,7 @@ export function setTextHighlighted(el, text, needle) {
  * @param {object} deps
  *   toolMeta(id)          -> { label, color }
  *   state                 -> istanza di createState()
- *   categoryOpen(cat)     -> boolean: stato iniziale della categoria (Settings)
+ *   categoryOpen(cat)     -> boolean: stato INIZIALE della categoria (Settings)
  *   crossCheck(key,value) -> { ok, message } | null   (opzionale)
  */
 export function createRenderer(deps) {
@@ -259,6 +260,7 @@ export function createRenderer(deps) {
 
     head.setAttribute('aria-expanded', String(open));
     head.dataset.toggleId = openId;          // delega: panel.js legge questo
+    head.dataset.level = 'view';
     body.hidden = !open;
 
     if (open) {
@@ -330,10 +332,10 @@ export function createRenderer(deps) {
       el.querySelector('[data-devref]').dataset.eventId = ev.__id;
     }
 
-    // Il nome puo contenere match di ricerca: sempre riscritto.
+    // Il nome può contenere match di ricerca: sempre riscritto.
     setTextHighlighted(el.querySelector('[data-name]'), ev.eventName || 'hit', ctx.search);
 
-    // La visibilita del devref dipende dai settings, quindi cambia nel tempo.
+    // La visibilità del devref dipende dai settings, quindi cambia nel tempo.
     el.querySelector('[data-devref]').hidden = !ctx.showDevRefs;
 
     const head = el.querySelector('.uad-event__head');
@@ -343,16 +345,22 @@ export function createRenderer(deps) {
 
     head.setAttribute('aria-expanded', String(open));
     head.dataset.toggleId = openId;
+    head.dataset.level = 'event';
     body.hidden = !open;
 
     if (open) {
       /**
        * Firma del contenuto: ricostruiamo solo quando cambia qualcosa che lo
-       * altera. Un semplice toggle non ricostruisce nulla.
+       * altera davvero.
        *   showAll            -> mostra/nasconde i campi vuoti
        *   search             -> evidenziazione dei match
-       *   crossCheckVersion  -> l'indice identity dai cookie e' arrivato
-       *   catVersion         -> lo stato iniziale delle categorie e' cambiato
+       *   crossCheckVersion  -> l'indice identity dai cookie è arrivato
+       *   catVersion         -> lo stato iniziale delle categorie è cambiato
+       *
+       * NOTA: lo stato aperto/chiuso dei singoli GRUPPI non è nella firma, e non
+       * deve esserci. I gruppi si aprono e chiudono cambiando `hidden`, cosa che
+       * panel.js fa direttamente sul DOM: rimetterli nella firma significherebbe
+       * ricostruire 200 righe a ogni click su un sotto-accordion.
        */
       const sig = [
         ctx.showAll ? 1 : 0,
@@ -364,6 +372,11 @@ export function createRenderer(deps) {
       if (body.dataset.built !== sig) {
         buildEventBody(body, ev, ctx);
         body.dataset.built = sig;
+      } else {
+        // Il contenuto è già corretto, ma lo stato dei gruppi può essere
+        // cambiato altrove (collapseAll, ricerca, ripristino da storage):
+        // riallineiamo solo gli attributi, senza ricostruire nulla.
+        syncGroupStates(body, ev);
       }
     }
 
@@ -377,7 +390,30 @@ export function createRenderer(deps) {
     return el;
   }
 
-  /** Il badge del canale e' il piu importante del pannello: va spiegato. */
+  /**
+   * Riallinea aria-expanded e hidden dei gruppi allo stato corrente, senza
+   * ricostruire le righe. È l'operazione che rende coerente il DOM dopo un
+   * collapseAll, una ricerca o un ripristino da storage.
+   */
+  function syncGroupStates(body, ev) {
+    const groups = body.querySelectorAll('.uad-group');
+    for (const g of groups) {
+      const cat = g.dataset.category;
+      if (!cat) continue;
+      const head = g.querySelector('.uad-group__head');
+      const gBody = g.querySelector('[data-body]');
+      if (!head || !gBody) continue;
+
+      const defaultOpen = categoryOpen(cat) !== false;
+      const open = state.isOpen(state.ids.group(ev.__id, cat), defaultOpen);
+
+      head.setAttribute('aria-expanded', String(open));
+      head.dataset.defaultOpen = String(defaultOpen);
+      gBody.hidden = !open;
+    }
+  }
+
+  /** Il badge del canale è il più importante del pannello: va spiegato. */
   function describeChannel(source) {
     switch (source) {
       case 'network':
@@ -412,7 +448,7 @@ export function createRenderer(deps) {
     products.textContent = '';
     products.hidden = true;
 
-    /* 1. Avviso in cima: "nessuna hit di rete osservata" e' la diagnosi piu
+    /* 1. Avviso in cima: "nessuna hit di rete osservata" è la diagnosi più
           utile del tool, quindi non va cercata tra i campi. */
     const warning = ev.meta && ev.meta.warning;
     if (warning) {
@@ -491,26 +527,39 @@ export function createRenderer(deps) {
     const openId = state.ids.group(ev.__id, cat);
 
     /**
-     * Lo stato iniziale arriva dai Settings: l'utente decide quali sezioni
-     * nascono aperte. Una sua deviazione esplicita su questo evento vince
-     * comunque sul default, ed e' state.js a gestirlo.
+     * Lo stato iniziale arriva dai Settings: è un DEFAULT, non un vincolo. Una
+     * deviazione esplicita dell'utente su questo evento vince, ed è state.js a
+     * gestirlo. Il default viene passato a isOpen() perché state.js memorizza
+     * solo le deviazioni: senza conoscerlo non saprebbe cosa considerare
+     * "normale".
      */
     const defaultOpen = categoryOpen(cat) !== false;
     const open = state.isOpen(openId, defaultOpen);
 
     head.setAttribute('aria-expanded', String(open));
     head.dataset.toggleId = openId;
-    // La delega di panel.js legge questo per calcolare il toggle corretto:
-    // senza il default, il primo click su un gruppo chiuso non lo aprirebbe.
+    head.dataset.level = 'group';
+    // panel.js legge questo per calcolare il toggle corretto: senza il default,
+    // il primo click su un gruppo chiuso non lo aprirebbe.
     head.dataset.defaultOpen = String(defaultOpen);
     body.hidden = !open;
 
-    if (open) {
-      const wrap = el.querySelector('[data-rows]');
-      for (const r of rows) {
-        const row = renderRow(r, ctx);
-        if (row) wrap.appendChild(row);
-      }
+    /**
+     * Le righe si costruiscono SEMPRE, anche a gruppo chiuso.
+     *
+     * È la correzione del bug: se le costruissimo solo quando aperto, il click
+     * sul gruppo dovrebbe innescare un re-render dell'intero corpo dell'evento
+     * per popolarlo — e quel re-render non avviene, perché la firma del corpo
+     * non cambia. Costruendole sempre, aprire un gruppo è solo `hidden = false`,
+     * che panel.js applica direttamente e istantaneamente.
+     *
+     * Il costo è contenuto: il gate pesante resta a livello di evento, e il
+     * corpo si costruisce solo quando l'evento è aperto.
+     */
+    const wrap = el.querySelector('[data-rows]');
+    for (const r of rows) {
+      const row = renderRow(r, ctx);
+      if (row) wrap.appendChild(row);
     }
 
     return el;
@@ -533,7 +582,7 @@ export function createRenderer(deps) {
     valEl.dataset.copy = text;
 
     // `src` = nome della variabile sorgente. Lo conosce solo l'hook: la rete
-    // riceve i parametri gia mappati e non puo saperlo. Con il mapper Adobe
+    // riceve i parametri già mappati e non può saperlo. Con il mapper Adobe
     // attivo, qui compare il nome umano della variabile.
     if (r.src) {
       const info = el.querySelector('[data-info]');
@@ -542,7 +591,7 @@ export function createRenderer(deps) {
       info.dataset.src = r.src;
     }
 
-    // Cross-check identity: il caso ⚠️ e' quello che vale — significa utente
+    // Cross-check identity: il caso ⚠️ è quello che vale — significa utente
     // contato due volte, sessioni spezzate, attribuzione rotta.
     const cc = r.crossCheck || crossCheck(r.key, r.value);
     if (cc) {
@@ -621,8 +670,8 @@ export function createRenderer(deps) {
       /**
        * Tool con eventi in memoria ma ora disattivato. Con rilevamento
        * automatico la tab resta visibile — i dati raccolti sono consultabili —
-       * ma va detto che non si aggiorna piu, altrimenti sembra che il tool
-       * abbia smesso di funzionare senza motivo.
+       * ma va detto che non si aggiorna più, altrimenti sembra che il tool abbia
+       * smesso di funzionare senza motivo.
        */
       el.classList.toggle('is-stale', t.stale === true);
       if (t.stale) {
@@ -632,8 +681,8 @@ export function createRenderer(deps) {
         el.removeAttribute('title');
       }
 
-      // Il puntino live compare solo sulle tab NON attive: segnalare novita su
-      // quella che stai guardando e' rumore.
+      // Il puntino live compare solo sulle tab NON attive: segnalare novità su
+      // quella che stai guardando è rumore.
       el.querySelector('[data-live]').hidden = !t.hasLive || active;
 
       const target = prev ? prev.nextSibling : container.firstChild;
@@ -692,12 +741,16 @@ export function createRenderer(deps) {
 
   /**
    * Elementi che contengono un match, in ordine di documento. Usati dalle
-   * frecce prev/next della ricerca.
+   * frecce prev/next della ricerca. I <mark> dentro gruppi chiusi vengono
+   * esclusi: puntare a un match invisibile porterebbe su un nodo vuoto.
    */
   function collectMatches(container) {
     const seen = new Set();
     const out = [];
     for (const m of container.querySelectorAll('mark')) {
+      // Un match dentro un gruppo chiuso non è raggiungibile: lo saltiamo.
+      const gBody = m.closest('.uad-group__body');
+      if (gBody && gBody.hidden) continue;
       const host = m.closest('.uad-event') || m.closest('.uad-view');
       if (!host || seen.has(host)) continue;
       seen.add(host);

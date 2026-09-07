@@ -2,20 +2,22 @@
  * Analytics Sniffer — orchestratore del pannello DevTools
  * Contesto: pagina di estensione (src/panel/panel.html), ES module
  *
- * v3 — cinque modifiche:
- *   1. autoListener: con rilevamento manuale le tab dipendono SOLO dalle spunte
- *      nei Settings. Risolve il caso "GTM non riesco a disattivarlo", dove il
- *      toggle fermava lo sniffing ma la tab restava perche i suoi eventi erano
- *      gia in memoria.
- *   2. identity index caricato AUTOMATICAMENTE quando cookieCrossCheck e'
- *      attiva: prima si costruiva solo aprendo il drawer cookie, quindi il
- *      cross-check non compariva mai se non lo si apriva.
- *   3. categorie viste negli eventi inoltrate ai Settings, che le rende
- *      configurabili anche se introdotte da un connettore nuovo.
- *   4. crossCheckVersion nella firma di rendering: quando l'identity index
- *      cambia, i corpi degli eventi gia costruiti si aggiornano.
- *   5. rimosso il controllo su ui.showToolbarIcons: le icone seguono la
- *      feature corrispondente, senza doppio livello.
+ * v4 — CORREZIONE del bug "i sotto-accordion non si aprono", parte 2 di 3.
+ *
+ * COSA ERA ROTTO
+ * Il click su un accordion chiamava solo state.toggle(), che notifica e fa
+ * schedulare un re-render. Ma il re-render non ricostruisce il corpo di un
+ * evento se la sua firma non cambia: il DOM del gruppo restava identico e il
+ * click sembrava non funzionare.
+ *
+ * COME È RISOLTO
+ * La delega applica il nuovo stato DIRETTAMENTE al DOM (aria-expanded + hidden)
+ * nello stesso tick del click. Il feedback è istantaneo e non dipende dal
+ * ciclo di rendering. Lo stato viene comunque scritto in state.js, che si
+ * occupa della persistenza e informa gli altri consumatori.
+ *
+ * Aggiunto anche catVersion: quando cambi il default di una sezione nei
+ * Settings, i corpi degli eventi già aperti si riallineano.
  *
  * FLUSSO DEI DATI
  *   background --port 'uad-panel'--> panel          eventi live
@@ -24,12 +26,8 @@
  *
  * PRINCIPIO DI RENDERING
  * Dati (store) e stato della UI (state.js) sono strutture SEPARATE. Il render
- * legge sempre lo stato: e' l'unico motivo per cui l'arrivo di un evento o il
+ * legge sempre lo stato: è l'unico motivo per cui l'arrivo di un evento o il
  * toggle di un'opzione non richiude gli accordion aperti dall'utente.
- *
- * GESTIONE DEGLI EVENTI DOM
- * Delega su contenitori stabili, non un listener per nodo: con 2000 eventi x 3
- * livelli, migliaia di closure ricreate a ogni render sarebbero un memory leak.
  */
 
 'use strict';
@@ -71,11 +69,11 @@ function toolMeta(id) {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const store = {
-  events:  [],
-  byTool:  new Map(),
-  seenIds: new Set(),      // storico e live si sovrappongono
+  events:     [],
+  byTool:     new Map(),
+  seenIds:    new Set(),   // storico e live si sovrappongono
   categories: new Set(),   // categorie viste: alimentano i Settings
-  dropped: 0
+  dropped:    0
 };
 
 const ui = {
@@ -87,6 +85,7 @@ const ui = {
   settings:     {},
   identityIndex: null,     // dai cookie, per il cross-check
   crossCheckVersion: 0,    // cambia quando l'index si aggiorna
+  catVersion:   0,         // cambia quando i default delle sezioni cambiano
   knownIds:     [],        // id accordion presenti: collapseAll e gc
   renderQueued: false,
   bootDone:     false
@@ -179,8 +178,8 @@ function connectPort() {
 
     port.onDisconnect.addListener(() => {
       ui.connected = false;
-      // Il service worker MV3 si sospende: la disconnessione e' NORMALE e non
-      // va segnalata come errore. Riconnettiamo al volo.
+      // Il service worker MV3 si sospende: la disconnessione è NORMALE e non va
+      // segnalata come errore. Riconnettiamo al volo.
       setTimeout(() => { if (!ui.connected) connectPort(); }, 300);
     });
 
@@ -198,15 +197,20 @@ function connectPort() {
 
 const uiState = createState({ tabId: null });   // tabId assegnato nel boot
 
+/**
+ * Stato INIZIALE di una categoria, dai Settings. È un default, non un vincolo:
+ * la deviazione esplicita dell'utente su un singolo evento vince, ed è state.js
+ * a gestirlo.
+ */
+function categoryOpen(cat) {
+  const cs = ui.settings.categoryState || {};
+  return Object.prototype.hasOwnProperty.call(cs, cat) ? cs[cat] === true : true;
+}
+
 const renderer = createRenderer({
   toolMeta,
   state: uiState,
-  categoryOpen: (cat) => {
-    // Le categorie non configurate nascono aperte: un connettore nuovo resta
-    // leggibile senza dover aggiungere nulla ai settings.
-    const cs = ui.settings.categoryState || {};
-    return Object.prototype.hasOwnProperty.call(cs, cat) ? cs[cat] === true : true;
-  },
+  categoryOpen,
   crossCheck: (key, value) => {
     if (!ui.settings.features?.cookieCrossCheck) return null;
     if (!cookiesMod || !ui.identityIndex) return null;
@@ -238,7 +242,7 @@ let settingsMod = null;   // creati nel boot: dipendono dai settings caricati
 let cookiesMod  = null;
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Predicato di visibilita
+   Predicato di visibilità
    ═══════════════════════════════════════════════════════════════════════════ */
 
 function matchesEvent(ev) {
@@ -275,7 +279,7 @@ function ingest(events, live) {
   for (const ev of events) {
     if (!ev || typeof ev !== 'object') continue;
 
-    // Risposta al comando "diagnose": non e' un evento di tracking.
+    // Risposta al comando "diagnose": non è un evento di tracking.
     if (ev.__uadDiagnostics) { showDiagnostics(ev.__uadDiagnostics); continue; }
 
     const k = eventKey(ev);
@@ -330,12 +334,12 @@ async function loadHistory() {
 
 /**
  * Con rilevamento automatico (default) mostriamo ogni tool che ha prodotto
- * eventi, anche se poi e' stato disattivato: i dati raccolti restano
+ * eventi, anche se poi è stato disattivato: i dati raccolti restano
  * consultabili.
  *
- * Con rilevamento manuale mostriamo SOLO i tool spuntati nei Settings. E' cio
- * che permette di far scomparire la tab di un tool disattivato senza dover
- * svuotare i dati — il caso "GTM non riesco a disattivarlo".
+ * Con rilevamento manuale mostriamo SOLO i tool spuntati nei Settings. È ciò che
+ * permette di far scomparire la tab di un tool disattivato senza dover svuotare
+ * i dati.
  */
 function visibleTools() {
   const auto = ui.settings.autoListener !== false;
@@ -369,8 +373,8 @@ function render() {
 
   const ids = visibleTools();
 
-  // Se il tool attivo non e' piu visibile (disattivato, clear, filtro),
-  // passiamo al primo disponibile.
+  // Se il tool attivo non è più visibile (disattivato, clear, filtro), passiamo
+  // al primo disponibile.
   if (ui.activeTool && !ids.includes(ui.activeTool)) ui.activeTool = ids[0] || null;
   if (!ui.activeTool && ids.length) ui.activeTool = ids[0];
 
@@ -382,7 +386,7 @@ function render() {
       shown: list.filter(matchesEvent).length,
       hasLive: list.some(e => e.__live),
       // Tool con eventi ma ora disattivato: la tab lo dichiara, invece di
-      // mostrare dati che non si aggiornano piu senza spiegazione.
+      // mostrare dati che non si aggiornano più senza spiegazione.
       stale: ui.settings.tools?.[id] !== true
     };
   });
@@ -393,7 +397,8 @@ function render() {
     showDevRefs: ui.settings.features?.devReferences === true,
     activeTool:  ui.activeTool,
     filtering:   isFiltering(),
-    crossCheckVersion: ui.crossCheckVersion
+    crossCheckVersion: ui.crossCheckVersion,
+    catVersion:  ui.catVersion
   };
 
   renderer.renderTabs($('#tabs'), tools, ctx);
@@ -435,9 +440,9 @@ async function loadSettings() {
 }
 
 /**
- * Solo cio che riguarda la toolbar: il resto lo gestisce settings.js.
+ * Solo ciò che riguarda la toolbar: il resto lo gestisce settings.js.
  * Un solo flag per funzione controlla comportamento E icona: nessun doppio
- * livello di visibilita.
+ * livello di visibilità.
  */
 function applySettingsToUI() {
   const f = ui.settings.features || {};
@@ -451,7 +456,7 @@ function applySettingsToUI() {
   uiState.applySettings(ui.settings);
 
   // Il cross-check ha bisogno dell'indice identity dai cookie. Caricandolo qui,
-  // i marker compaiono senza dover aprire il drawer: era il difetto della v2.
+  // i marker compaiono senza dover aprire il drawer.
   if (f.cookieCrossCheck === true && cookiesMod && !ui.identityIndex) {
     cookiesMod.loadIdentityOnly();
   }
@@ -461,9 +466,15 @@ function applySettingsToUI() {
  * Merge profondo locale, poi persistenza. Il background scrive su
  * chrome.storage.local e il bridge di ogni tab propaga ai world MAIN: nessun
  * reload necessario.
- * @param {boolean} replace true = sostituisce (usato dal reset)
+ *
+ * @param {object}  patch
+ * @param {boolean} replace  true = sostituisce (usato dal reset)
  */
 async function patchSettings(patch, replace) {
+  // Un cambio ai default delle sezioni richiede di riallineare i corpi degli
+  // eventi già aperti: catVersion entra nella firma di rendering.
+  const touchesCategories = !!(patch && patch.categoryState) || replace === true;
+
   if (replace) {
     ui.settings = patch || {};
   } else {
@@ -477,6 +488,22 @@ async function patchSettings(patch, replace) {
       return dst;
     };
     ui.settings = deep(next, patch);
+  }
+
+  if (touchesCategories) {
+    ui.catVersion++;
+    /**
+     * Cambiare il DEFAULT di una sezione deve avere effetto visibile subito,
+     * anche sugli eventi già a schermo. Le deviazioni manuali su quei gruppi
+     * sarebbero altrimenti più forti del nuovo default, e sembrerebbe che
+     * l'impostazione non funzioni.
+     *
+     * È il comportamento richiesto: le impostazioni definiscono il default per
+     * evitare cluttering, non un blocco permanente. Da qui in avanti puoi
+     * ancora aprire e chiudere ogni singolo gruppo a mano.
+     */
+    const cats = patch && patch.categoryState ? Object.keys(patch.categoryState) : null;
+    uiState.clearGroupOverrides(cats);
   }
 
   applySettingsToUI();
@@ -511,16 +538,51 @@ function toggleDrawer(sel, btnSel) {
    Due listener per tutto il pannello, invece di uno per nodo.
    ═══════════════════════════════════════════════════════════════════════════ */
 
+/**
+ * Applica il nuovo stato di un accordion DIRETTAMENTE al DOM, nello stesso tick
+ * del click.
+ *
+ * È la correzione del bug: affidarsi al re-render non funziona, perché il corpo
+ * di un evento non si ricostruisce se la sua firma non cambia — e lo stato dei
+ * gruppi, correttamente, non fa parte della firma.
+ *
+ * Lo stato viene comunque scritto in state.js: è lì che vive la persistenza e da
+ * lì gli altri consumatori (ricerca, collapseAll) leggono.
+ */
+function applyToggleToDom(head, open) {
+  head.setAttribute('aria-expanded', String(open));
+
+  const level = head.dataset.level;
+  let body = null;
+
+  if (level === 'group') {
+    body = head.parentElement?.querySelector('[data-body]');
+  } else if (level === 'event') {
+    body = head.parentElement?.querySelector('[data-body]');
+  } else {
+    body = head.parentElement?.querySelector('[data-body]');
+  }
+
+  if (body) body.hidden = !open;
+
+  /**
+   * Aprire un EVENTO può richiedere di costruirne il corpo: le view e i gruppi
+   * hanno già tutto in memoria, ma il corpo di un evento è lazy. Un re-render
+   * lo popola, ed è corretto schedularlo qui.
+   */
+  if (level === 'event' && open) scheduleRender();
+}
+
 function bindDelegation() {
   $('#panes').addEventListener('click', (e) => {
     // 1. toggle di un accordion (view, evento, gruppo)
     const toggle = e.target.closest('[data-toggle-id]');
     if (toggle) {
-      const dflt = toggle.dataset.defaultOpen;
-      uiState.toggle(
-        toggle.dataset.toggleId,
-        dflt === undefined ? undefined : dflt === 'true'
-      );
+      const dfltAttr = toggle.dataset.defaultOpen;
+      const dflt = dfltAttr === undefined ? undefined : dfltAttr === 'true';
+      const next = uiState.toggle(toggle.dataset.toggleId, dflt);
+      // Feedback immediato: non aspettiamo il ciclo di rendering.
+      applyToggleToDom(toggle, next);
       return;
     }
 
@@ -559,7 +621,7 @@ function bindDelegation() {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 function bindToolbar() {
-  // Refresh e Clear sono azioni DISTINTE: nessuna ambiguita.
+  // Refresh e Clear sono azioni DISTINTE: nessuna ambiguità.
   $('#btn-refresh').addEventListener('click', () => {
     try { chrome.devtools.inspectedWindow.reload({}); }
     catch (e) { console.error('[Sniffer panel] reload', e); toast('Reload non disponibile'); }
@@ -573,8 +635,11 @@ function bindToolbar() {
 
   $('#btn-collapse').addEventListener('click', () => {
     // collapseAll richiede la lista degli id: svuotare lo stato non basta,
-    // perche i default riaprirebbero view e gruppi.
+    // perché i default riaprirebbero view e gruppi.
     uiState.collapseAll(ui.knownIds);
+    // Le modifiche di massa passano dal re-render, che riallinea gli attributi
+    // via syncGroupStates senza ricostruire le righe.
+    scheduleRender();
   });
 
   $('#btn-export').addEventListener('click', () => {
@@ -607,7 +672,7 @@ function bindToolbar() {
     ui.showAll = !ui.showAll;
     $('#btn-showall').setAttribute('aria-pressed', String(ui.showAll));
     // NOTA: non azzeriamo lo stato degli accordion. Il toggle non deve
-    // richiudere cio che l'utente aveva aperto.
+    // richiudere ciò che l'utente aveva aperto.
     patchSettings({ ui: { showAllFields: ui.showAll } });
   });
 
@@ -634,8 +699,8 @@ function bindToolbar() {
   });
   $('#cookies-close').addEventListener('click', () => { $('#cookies-drawer').hidden = true; });
 
-  // Stop navigazione: declarativeNetRequest e' obbligatorio nel manifest
-  // (Chrome non lo ammette tra i permessi opzionali), quindi nessuna richiesta.
+  // Stop navigazione: declarativeNetRequest è obbligatorio nel manifest (Chrome
+  // non lo ammette tra i permessi opzionali), quindi nessuna richiesta.
   $('#btn-stopnav').addEventListener('click', async () => {
     const btn = $('#btn-stopnav');
     const on = btn.getAttribute('aria-pressed') !== 'true';
@@ -728,7 +793,7 @@ window.__uadOnDevtoolsMessage = (msg) => {
   bindDelegation();
   connectPort();
 
-  // 1. Settings PRIMA di tutto: tema e visibilita icone dipendono da loro.
+  // 1. Settings PRIMA di tutto: tema e visibilità icone dipendono da loro.
   await loadSettings();
   theme.init(ui.settings);
 
@@ -759,14 +824,14 @@ window.__uadOnDevtoolsMessage = (msg) => {
     tabId: ui.tabId,
     onIdentityIndex: (idx) => {
       // Il cross-check nelle righe key-value usa questo indice. Incrementare
-      // crossCheckVersion fa ricostruire i corpi degli eventi gia aperti.
+      // crossCheckVersion fa ricostruire i corpi degli eventi già aperti.
       ui.identityIndex = idx;
       ui.crossCheckVersion++;
       scheduleRender();
     }
   });
 
-  // 4. Se il cross-check e' attivo, l'indice serve subito: senza questo i marker
+  // 4. Se il cross-check è attivo, l'indice serve subito: senza questo i marker
   //    comparirebbero solo dopo aver aperto il drawer cookie.
   if (ui.settings.features?.cookieCrossCheck === true) {
     cookiesMod.loadIdentityOnly();
@@ -778,8 +843,8 @@ window.__uadOnDevtoolsMessage = (msg) => {
 
   ui.bootDone = true;
 
-  // Se non arriva nulla, la causa piu probabile e' che la pagina fosse gia
-  // aperta all'installazione: i content script si iniettano solo al load.
+  // Se non arriva nulla, la causa più probabile è che la pagina fosse già aperta
+  // all'installazione: i content script si iniettano solo al load.
   setTimeout(() => {
     if (!store.events.length) {
       $('#empty-diagnostics').textContent =
