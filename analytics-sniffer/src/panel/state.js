@@ -1,15 +1,23 @@
 /**
- * Universal Analytics Debugger — stato della UI degli accordion
+ * Analytics Sniffer — stato della UI degli accordion
  * Contesto: pagina di estensione (panel), ES module
  *
- * v2: aggiunto setTabId(), perche panel.js crea l'istanza prima di conoscere il
- *     tabId (serve per la chiave di storage).
+ * v4 — aggiunto clearGroupOverrides(): cancella le deviazioni manuali sui
+ *      sotto-accordion quando cambia il DEFAULT nei Settings.
+ *
+ * PERCHE SERVE
+ * Lo stato memorizza solo le DEVIAZIONI dell'utente rispetto al default. Se apri
+ * a mano la sezione "Consent" su tre eventi e poi imposti "Consent: chiusa" nei
+ * Settings, quelle tre deviazioni sarebbero più forti del nuovo default e i
+ * gruppi resterebbero aperti: l'impostazione sembrerebbe non funzionare.
+ * Cancellando le deviazioni sulle categorie toccate, il nuovo default si applica
+ * subito — e da quel momento puoi ancora aprire e chiudere ogni singolo gruppo a
+ * mano. È un default per evitare cluttering, non un blocco permanente.
  *
  * PRINCIPIO CENTRALE
  * I dati (store.events) e lo stato di apertura sono strutture SEPARATE. Il
- * render legge sempre da qui: e' l'unico motivo per cui l'arrivo di un nuovo
- * evento, o il toggle di un'opzione, non richiude cio che l'utente aveva
- * aperto. Ricostruire lo stato dai dati era il bug esplicitamente da evitare.
+ * render legge sempre da qui: è l'unico motivo per cui l'arrivo di un nuovo
+ * evento, o il toggle di un'opzione, non richiude ciò che l'utente aveva aperto.
  *
  * TRE LIVELLI, TRE PREFISSI
  *   v:<viewId>              macro-accordion, una view di pagina
@@ -20,15 +28,15 @@
  *
  * SNAPSHOT A PILA, NON SINGOLO
  * Ricerca e filtri possono attivarsi in qualsiasi ordine e sovrapporsi. Con un
- * solo slot di backup, attivare la ricerca dentro un filtro attivo e poi
- * chiudere il filtro ripristinerebbe lo stato sbagliato. Una pila con chiavi
- * nominate risolve: ogni consumatore ha il suo livello.
+ * solo slot di backup, attivare la ricerca dentro un filtro attivo e poi chiudere
+ * il filtro ripristinerebbe lo stato sbagliato. Una pila con chiavi nominate
+ * risolve: ogni consumatore ha il suo livello.
  *
  * PERSISTENZA
  * Il pannello DevTools viene creato UNA volta e riusato, quindi lo stato in
  * memoria sopravvive ai reload della pagina ispezionata. NON sopravvive alla
- * chiusura di DevTools: per quello serve lo storage, con un tetto rigido perche
- * su 2000 eventi x 3 livelli le chiavi diventerebbero migliaia.
+ * chiusura di DevTools: per quello serve lo storage, con un tetto rigido perché
+ * su 2000 eventi × 3 livelli le chiavi diventerebbero migliaia.
  */
 
 'use strict';
@@ -36,7 +44,7 @@
 const STORAGE_PREFIX = 'uad_uistate_';
 const PERSIST_DEBOUNCE_MS = 400;
 
-/** Oltre questa soglia non persistiamo: e' uno stato di comodo, non un dato. */
+/** Oltre questa soglia non persistiamo: è uno stato di comodo, non un dato. */
 const PERSIST_MAX_KEYS = 1200;
 
 /** Oltre questa soglia la garbage collection scatta anche senza richiesta. */
@@ -52,7 +60,7 @@ export function createState(opts = {}) {
   const st = {
     /**
      * id -> boolean. SOLO le deviazioni esplicite dell'utente.
-     * Un id assente significa "usa il default del suo livello": cosi lo stato
+     * Un id assente significa "usa il default del suo livello": così lo stato
      * resta piccolo e i default possono cambiare senza riscrivere nulla.
      */
     open: Object.create(null),
@@ -62,9 +70,9 @@ export function createState(opts = {}) {
 
     /** Default per livello, sovrascrivibili dai settings. */
     defaults: {
-      view:  true,     // le view sono aperte: e' il contenitore
+      view:  true,     // le view sono aperte: è il contenitore
       event: false,    // gli eventi chiusi: 50 eventi aperti sono illeggibili
-      group: true      // i gruppi aperti: se l'evento e' aperto, si vuole vedere
+      group: true      // i gruppi aperti, salvo default per categoria
     },
 
     /** Quando ricerca o filtri sono attivi, i rami con match si aprono. */
@@ -84,6 +92,19 @@ export function createState(opts = {}) {
     return 'event';
   }
 
+  /** Estrae la categoria da un id di gruppo: g:<eventId>:<categoria> */
+  function categoryOf(id) {
+    const s = String(id);
+    if (s.charAt(0) !== 'g') return null;
+    // La categoria è tutto ciò che segue il SECONDO due punti: l'eventId può
+    // contenerne (toolId|seq|timestamp|viewId), la categoria no.
+    const first = s.indexOf(':');
+    if (first === -1) return null;
+    const second = s.indexOf(':', first + 1);
+    if (second === -1) return null;
+    return s.slice(second + 1);
+  }
+
   function defaultFor(id) {
     // Con ricerca o filtri attivi tutto si apre: l'utente vuole vedere i match,
     // non cliccare 40 accordion.
@@ -96,8 +117,8 @@ export function createState(opts = {}) {
   /**
    * Stato effettivo: deviazione esplicita dell'utente, oppure il default.
    * @param {string}  id
-   * @param {boolean} [override] default alternativo, usato dai gruppi tecnici
-   *                             che nascono chiusi
+   * @param {boolean} [override] default alternativo per questo id, usato dai
+   *                             gruppi il cui stato iniziale arriva dai Settings
    */
   function isOpen(id, override) {
     if (id in st.open) return st.open[id];
@@ -124,11 +145,15 @@ export function createState(opts = {}) {
     return v;
   }
 
+  /**
+   * @returns {boolean} il NUOVO stato, così il chiamante può applicarlo al DOM
+   *   immediatamente senza attendere il re-render.
+   */
   function toggle(id, override) {
     return setOpen(id, !isOpen(id, override), override);
   }
 
-  /* ══════════════════════ operazioni su piu elementi ══════════════════════ */
+  /* ══════════════════════ operazioni su più elementi ══════════════════════ */
 
   /**
    * Chiude tutto. Non basta svuotare st.open: i default riaprirebbero view e
@@ -157,9 +182,57 @@ export function createState(opts = {}) {
   }
 
   /**
+   * Cancella le deviazioni manuali sui SOTTOGRUPPI, così il default appena
+   * impostato nei Settings si applica anche agli eventi già a schermo.
+   *
+   * Senza questo, l'impostazione sembrerebbe non funzionare: le sezioni aperte a
+   * mano resterebbero aperte, perché una deviazione esplicita è più forte del
+   * default.
+   *
+   * NON tocca view ed eventi: l'utente sta configurando le sezioni dei campi, e
+   * chiudergli l'evento che stava leggendo sarebbe sconcertante.
+   *
+   * @param {string[]|null} categories  categorie da resettare. null = tutte.
+   * @returns {number} deviazioni rimosse
+   */
+  function clearGroupOverrides(categories) {
+    const wanted = Array.isArray(categories) && categories.length
+      ? new Set(categories)
+      : null;
+
+    let removed = 0;
+
+    for (const id of Object.keys(st.open)) {
+      if (levelOf(id) !== 'group') continue;
+      if (wanted) {
+        const cat = categoryOf(id);
+        if (!cat || !wanted.has(cat)) continue;
+      }
+      delete st.open[id];
+      removed++;
+    }
+
+    // Anche gli snapshot vanno potati: se una ricerca è attiva, al suo termine
+    // ripristinerebbe le deviazioni che abbiamo appena rimosso.
+    for (const [, snap] of st.snapshots) {
+      for (const id of Object.keys(snap.open)) {
+        if (levelOf(id) !== 'group') continue;
+        if (wanted) {
+          const cat = categoryOf(id);
+          if (!cat || !wanted.has(cat)) continue;
+        }
+        delete snap.open[id];
+      }
+    }
+
+    if (removed) { schedulePersist(); notify(); }
+    return removed;
+  }
+
+  /**
    * Apre la catena di antenati di un elemento. Usata dal salto sui risultati di
-   * ricerca: un match dentro un evento chiuso dentro una view chiusa non
-   * sarebbe raggiungibile.
+   * ricerca: un match dentro un evento chiuso dentro una view chiusa non sarebbe
+   * raggiungibile.
    * @param {{viewId?:string, eventId?:string, category?:string}} path
    */
   function expandPath(path = {}) {
@@ -178,7 +251,7 @@ export function createState(opts = {}) {
    * Fotografa lo stato prima di un'operazione che lo altera (ricerca, filtri).
    * IDEMPOTENTE: chiamarla due volte con la stessa chiave non sovrascrive la
    * fotografia originale. Senza questo, digitando nella ricerca ogni battuta
-   * salverebbe lo stato GIA espanso e il ripristino finale non riporterebbe
+   * salverebbe lo stato GIÀ espanso e il ripristino finale non riporterebbe
    * nulla.
    */
   function snapshot(key) {
@@ -198,8 +271,8 @@ export function createState(opts = {}) {
 
     st.open = { ...snap.open };
     // Se un altro consumatore ha ancora uno snapshot aperto, il suo stato di
-    // partenza e' piu vecchio del nostro: forceExpand resta attivo finche
-    // rimane almeno un consumatore.
+    // partenza è più vecchio del nostro: forceExpand resta attivo finché rimane
+    // almeno un consumatore.
     st.forceExpand = st.snapshots.size > 0 ? st.forceExpand : snap.forceExpand;
 
     schedulePersist();
@@ -224,7 +297,7 @@ export function createState(opts = {}) {
       if (!st.forceExpand) { st.forceExpand = true; notify(); }
       return;
     }
-    // Disattiviamo solo quando nessun consumatore lo richiede piu.
+    // Disattiviamo solo quando nessun consumatore lo richiede più.
     restore(reason);
     if (st.snapshots.size === 0 && st.forceExpand) {
       st.forceExpand = false;
@@ -235,7 +308,7 @@ export function createState(opts = {}) {
   /* ═════════════════════════ garbage collection ═════════════════════════ */
 
   /**
-   * Rimuove le chiavi di elementi che non esistono piu. Senza questo, con il
+   * Rimuove le chiavi di elementi che non esistono più. Senza questo, con il
    * ring buffer del background e una sessione lunga, st.open crescerebbe
    * indefinitamente accumulando id di eventi scartati.
    * @param {Set<string>|string[]} validIds
@@ -289,12 +362,12 @@ export function createState(opts = {}) {
     if (!persist || tabId === null) return;
     const keys = Object.keys(st.open);
 
-    // Oltre il tetto non salviamo nulla: e' uno stato di comodo, e riempire lo
-    // storage con migliaia di booleani danneggerebbe cio che conta davvero,
-    // cioe gli eventi raccolti.
+    // Oltre il tetto non salviamo nulla: è uno stato di comodo, e riempire lo
+    // storage con migliaia di booleani danneggerebbe ciò che conta davvero,
+    // cioè gli eventi raccolti.
     if (keys.length > PERSIST_MAX_KEYS) {
       try { await chrome.storage.local.remove([storageKey()]); }
-      catch (e) { console.error('[UAD state] remove', e); }
+      catch (e) { console.error('[Sniffer state] remove', e); }
       return;
     }
 
@@ -303,7 +376,7 @@ export function createState(opts = {}) {
         [storageKey()]: { open: st.open, savedAt: Date.now() }
       });
     } catch (e) {
-      console.error('[UAD state] persistNow', e);
+      console.error('[Sniffer state] persistNow', e);
     }
   }
 
@@ -318,15 +391,15 @@ export function createState(opts = {}) {
       const saved = r[storageKey()];
       if (!saved || !saved.open || typeof saved.open !== 'object') return false;
 
-      // Merge, non sostituzione: chi ha gia interagito prima dell'hydrate
-      // (possibile, e' asincrono) non deve perdere le sue scelte.
+      // Merge, non sostituzione: chi ha già interagito prima dell'hydrate
+      // (possibile, è asincrono) non deve perdere le sue scelte.
       for (const [k, v] of Object.entries(saved.open)) {
         if (!(k in st.open) && typeof v === 'boolean') st.open[k] = v;
       }
       notify();
       return true;
     } catch (e) {
-      console.error('[UAD state] hydrate', e);
+      console.error('[Sniffer state] hydrate', e);
       return false;
     }
   }
@@ -337,7 +410,7 @@ export function createState(opts = {}) {
     st.forceExpand = false;
     if (persist && tabId !== null) {
       try { await chrome.storage.local.remove([storageKey()]); }
-      catch (e) { console.error('[UAD state] clearPersisted', e); }
+      catch (e) { console.error('[Sniffer state] clearPersisted', e); }
     }
     notify();
   }
@@ -353,7 +426,7 @@ export function createState(opts = {}) {
     Promise.resolve().then(() => {
       notifyQueued = false;
       for (const fn of st.listeners) {
-        try { fn(); } catch (e) { console.error('[UAD state] listener', e); }
+        try { fn(); } catch (e) { console.error('[Sniffer state] listener', e); }
       }
     });
   }
@@ -372,6 +445,8 @@ export function createState(opts = {}) {
     const next = {
       view:  !collapse,
       event: false,
+      // Il default per i gruppi resta true: lo stato per categoria arriva dal
+      // parametro `override` di isOpen(), passato da render.js.
       group: !collapse
     };
     if (next.view === st.defaults.view && next.group === st.defaults.group) return;
@@ -403,7 +478,7 @@ export function createState(opts = {}) {
     isOpen, setOpen, toggle,
 
     // operazioni multiple
-    collapseAll, expandAll, expandPath,
+    collapseAll, expandAll, expandPath, clearGroupOverrides,
 
     // snapshot per ricerca e filtri
     snapshot, restore, hasSnapshot, dropSnapshot, setForceExpand,
@@ -421,6 +496,7 @@ export function createState(opts = {}) {
     // diagnostica
     debug: () => ({
       keys: size(),
+      groupOverrides: Object.keys(st.open).filter(k => levelOf(k) === 'group').length,
       forceExpand: st.forceExpand,
       defaults: { ...st.defaults },
       snapshots: Array.from(st.snapshots.keys()),
