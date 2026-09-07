@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    Analytics Sniffer — stile del pannello DevTools
-   v4: barra mapper EDDL, lista mappature, mappatura inline nelle righe
+   v5: accordion dei tool, evidenziazione dei filtri, navigazione tra i match
 
    PRINCIPI
    · Palette a grigi CALDI neutri: il nero puro su schermo affatica e appiattisce
@@ -9,10 +9,11 @@
      d'occhio: rientro progressivo, guida verticale, peso decrescente.
    · Il colore del tool arriva da --tool-color, impostata da panel.js: nessun
      selettore per singolo connettore, così un tool nuovo si colora da sé.
-   · Responsive reale: il pannello DevTools può essere ancorato a 300px. Sotto
-     certe soglie il testo secondario scompare, le icone restano.
-   · Nessuna animazione oltre i 200ms, tranne il pulse: è uno strumento di
-     lavoro, non una vitrine.
+   · Due evidenziazioni, due colori: la ricerca in viola, i filtri in verde
+     acqua. Con entrambi attivi devi poter distinguere cosa ha fatto match per
+     cosa.
+   · Responsive reale: il pannello DevTools può essere ancorato a 300px.
+   · Nessuna animazione oltre i 200ms, tranne il pulse.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* ─────────────────────────────── 1. TEMA ─────────────────────────────── */
@@ -35,6 +36,10 @@ html[data-theme='light'] {
   --accent:        #7c5cf0;
   --accent-fg:     #ffffff;
   --accent-soft:   #f2eeff;
+
+  /* Evidenziazione dei filtri: distinta dall'accento della ricerca. */
+  --filter:        #0d9488;
+  --filter-soft:   #d9f5f1;
 
   --ok:            #17803d;
   --warn:          #a35b00;
@@ -66,6 +71,9 @@ html[data-theme='dark'] {
   --accent-fg:     #1b1b1a;
   --accent-soft:   #2a2440;
 
+  --filter:        #4dd8c4;
+  --filter-soft:   #17322f;
+
   --ok:            #4ade80;
   --warn:          #fbbf24;
   --err:           #f87171;
@@ -79,8 +87,8 @@ html[data-theme='dark'] {
 }
 
 /* 'system' segue il sistema operativo. Quando DevTools è scuro ma il sistema
-   chiaro, theme.js scrive direttamente data-theme="dark": la media query da
-   sola sbaglierebbe, perché il pannello vive dentro DevTools, non nel sistema. */
+   chiaro, theme.js scrive direttamente data-theme="dark": la media query da sola
+   sbaglierebbe, perché il pannello vive dentro DevTools, non nel sistema. */
 @media (prefers-color-scheme: dark) {
   html[data-theme='system'] {
     --bg:            #1b1b1a;
@@ -99,6 +107,9 @@ html[data-theme='dark'] {
     --accent:        #a48cff;
     --accent-fg:     #1b1b1a;
     --accent-soft:   #2a2440;
+
+    --filter:        #4dd8c4;
+    --filter-soft:   #17322f;
 
     --ok:            #4ade80;
     --warn:          #fbbf24;
@@ -232,10 +243,11 @@ button {
   color: var(--accent);
 }
 
-/* Filtri attivi anche a pannello chiuso: lo stato deve restare visibile. */
+/* Filtri attivi anche a pannello chiuso: usa il colore dei filtri, così si
+   distingue da un semplice toggle aperto. */
 .uad-btn.has-filters {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--filter-soft);
+  color: var(--filter);
 }
 
 .uad-btn--ghost {
@@ -475,8 +487,54 @@ button {
 
 .uad-filters__actions {
   display: flex;
+  align-items: center;
   gap: 6px;
   margin-top: 7px;
+  flex-wrap: wrap;
+}
+
+/* Navigazione tra i risultati: allineata a destra, così i pulsanti di modifica
+   restano a sinistra dove si aggiungono le condizioni. */
+.uad-filters__nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  padding: 2px 4px 2px 7px;
+  background: var(--filter-soft);
+  border-radius: var(--radius);
+}
+
+.uad-filters__count {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--filter);
+  flex: 0 0 auto;
+}
+
+/* Filtri attivi senza risultati: lo diciamo nel contatore. */
+.uad-filters__count[data-empty='true'] { color: var(--warn); }
+
+.uad-filters__navbtn {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  color: var(--filter);
+  font-size: 11px;
+  flex: 0 0 auto;
+  transition: background .1s ease;
+}
+.uad-filters__navbtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--filter) 18%, transparent);
+}
+.uad-filters__navbtn:disabled {
+  opacity: .35;
+  cursor: default;
+  pointer-events: none;
 }
 
 .uad-filter-row {
@@ -563,8 +621,8 @@ button {
   font-weight: 550;
 }
 
-/* Tool disattivato con eventi già raccolti: la tab resta consultabile ma
-   dichiara di essere ferma. Bordo tratteggiato e colore attenuato. */
+/* Tool disattivato con eventi già raccolti: la tab resta consultabile ma dichiara
+   di essere ferma. Bordo tratteggiato e colore attenuato. */
 .uad-tab.is-stale {
   opacity: .62;
   border-bottom-style: dashed;
@@ -717,8 +775,8 @@ button {
 }
 .uad-mapsw.is-on input { accent-color: var(--accent-fg); }
 
-/* Elenco completo delle mappature, collassato. Serve a verificare cosa il
-   mapper ha letto senza scorrere le hit. */
+/* Elenco completo delle mappature, collassato. Serve a verificare cosa il mapper
+   ha letto senza scorrere le hit. */
 .uad-maplist {
   margin: 0 6px 6px;
   padding: 8px 10px;
@@ -961,11 +1019,19 @@ button {
   100% { opacity: 0;  transform: scale(1.015); }
 }
 
-/* Risultato di ricerca corrente. */
+/* Risultato corrente della RICERCA. */
 .uad-event.is-current-match,
 .uad-view.is-current-match {
   box-shadow: inset 0 0 0 1.5px var(--accent);
   background: var(--accent-soft);
+}
+
+/* Risultato corrente dei FILTRI: colore distinto, così con ricerca e filtri
+   attivi insieme si capisce quale navigazione ha portato lì. */
+.uad-event.is-filter-match,
+.uad-view.is-filter-match {
+  box-shadow: inset 0 0 0 1.5px var(--filter);
+  background: var(--filter-soft);
 }
 
 /* ─────────────────── 12. ACCORDION — LIVELLO 3: GRUPPO ─────────────────── */
@@ -1085,6 +1151,13 @@ button {
 .uad-row:hover .uad-row__info,
 .uad-row__info:focus-visible { opacity: 1; }
 
+/* Un filtro su `src` non ha nulla da illuminare a schermo, perché il valore vive
+   nel tooltip: l'icona resta visibile e colorata per segnalarlo. */
+.uad-row__info[data-filter-match='true'] {
+  opacity: 1;
+  color: var(--filter);
+}
+
 /* Cross-check identity: 🔗 verde o ⚠️ rosso. Il caso rosso è quello che vale:
    significa utente contato due volte, sessioni spezzate, attribuzione rotta. */
 .uad-row__link {
@@ -1113,15 +1186,33 @@ button {
 }
 .uad-row__value:hover { background: var(--accent-soft); }
 
-/* Evidenziazione dei match di ricerca. */
+/* ── Evidenziazione: due colori, due significati ──
+   La ricerca in viola, i filtri in verde acqua. Con entrambi attivi devi poter
+   distinguere cosa ha fatto match per cosa: un solo colore renderebbe
+   l'informazione inutile. */
 .uad-row mark,
 .uad-event__name mark,
 .uad-view__url mark,
-.uad-product__name mark {
+.uad-product__name mark,
+.uad-group__name mark {
   background: color-mix(in srgb, var(--accent) 30%, transparent);
   color: inherit;
   border-radius: 2px;
   padding: 0 1px;
+}
+
+.uad-row mark[data-filter],
+.uad-event__name mark[data-filter],
+.uad-view__url mark[data-filter],
+.uad-product__name mark[data-filter],
+.uad-group__name mark[data-filter] {
+  background: color-mix(in srgb, var(--filter) 32%, transparent);
+  /* Il sottolineato distingue anche senza colore: utile a chi ha difficoltà
+     nella distinzione cromatica. */
+  text-decoration: underline;
+  text-decoration-color: var(--filter);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
 }
 
 /* ───────────────────────── 14. PRODOTTI ───────────────────────── */
@@ -1171,7 +1262,7 @@ button {
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(440px, 94vw);
+  width: min(460px, 96vw);
   display: flex;
   flex-direction: column;
   background: var(--bg);
@@ -1308,8 +1399,10 @@ button {
 /* Permesso mancante: la nota diventa un avviso. */
 .uad-switch[data-permission='missing'] .uad-switch__note { color: var(--warn); }
 
-/* Icona di una feature spenta: non ha nulla da mostrare. */
-.uad-switch[data-inactive='true'] { opacity: .5; }
+/* Impostazione di un tool spento: attenuata ma cliccabile, così puoi preparare
+   la configurazione prima di attivare il tool. */
+.uad-switch[data-inactive='true'] { opacity: .55; }
+.uad-switch[data-inactive='true'] .uad-switch__note { color: var(--warn); }
 
 .uad-switch--inline {
   display: inline-flex;
@@ -1319,6 +1412,17 @@ button {
   border: none;
   white-space: nowrap;
 }
+
+/* Impostazione dentro l'accordion di un tool: rientro e bordo di guida, per
+   distinguerla a vista da una funzione globale. */
+.uad-switch--nested {
+  padding: 7px 0 7px 9px;
+  border-bottom: none;
+  border-left: 1px solid var(--border);
+  margin-left: 2px;
+}
+.uad-switch--nested:hover { border-left-color: var(--tool-color); }
+.uad-switch--nested .uad-switch__label { font-size: 12px; }
 
 .uad-field {
   display: flex;
@@ -1361,7 +1465,7 @@ button {
   color: var(--fg-muted);
 }
 
-/* ───────────────────── 17. LISTA TOOL (drag) ───────────────────── */
+/* ───────────────── 17. ACCORDION DEI TOOL (impostazioni) ───────────────── */
 
 .uad-tool-list {
   list-style: none;
@@ -1369,47 +1473,103 @@ button {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
-.uad-tool-item {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 8px;
+.uad-tool-acc {
   background: var(--bg-raised);
   border: 1px solid var(--border);
   border-left: 2px solid var(--tool-color);
   border-radius: var(--radius-sm);
-  cursor: grab;
+  overflow: hidden;
   transition: background .12s ease, transform .12s ease, opacity .12s ease;
 }
-.uad-tool-item:hover { background: var(--bg-hover); }
 
-.uad-tool-item.is-dragging {
+.uad-tool-acc.is-dragging {
   opacity: .4;
   cursor: grabbing;
 }
 
-.uad-tool-item.is-drop-target {
+.uad-tool-acc.is-drop-target {
   border-top: 2px solid var(--accent);
   transform: translateY(1px);
 }
 
-.uad-tool-item__grip {
+.uad-tool-acc__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px;
+  cursor: pointer;
+  transition: background .12s ease;
+}
+.uad-tool-acc__head:hover { background: var(--bg-hover); }
+
+/* Il grip ha il cursore del drag, non quello dell'accordion: sono due gesti
+   diversi sullo stesso elemento. */
+.uad-tool-acc__grip {
   color: var(--fg-faint);
   font-size: 11px;
   letter-spacing: -2px;
   cursor: grab;
   flex: 0 0 auto;
 }
+.uad-tool-acc__grip:active { cursor: grabbing; }
 
-.uad-tool-item .uad-switch--inline { flex: 1 1 auto; min-width: 0; }
-.uad-tool-item .uad-switch__label {
+.uad-tool-acc__cb {
+  margin: 0;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--tool-color);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.uad-tool-acc__label {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 500;
 }
+
+.uad-tool-acc__optcount {
+  font-size: 10px;
+  color: var(--fg-faint);
+  font-family: var(--mono);
+  flex: 0 0 auto;
+}
+
+.uad-tool-acc__caret {
+  display: inline-block;
+  width: 10px;
+  color: var(--fg-faint);
+  font-size: 9px;
+  transition: transform .15s ease;
+  flex: 0 0 auto;
+}
+[aria-expanded='true'] > .uad-tool-acc__caret { transform: rotate(90deg); }
+
+.uad-tool-acc__body {
+  padding: 2px 10px 9px 26px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.uad-tool-acc__note {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--fg-faint);
+  line-height: 1.5;
+}
+
+.uad-tool-acc__settings {
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+}
+.uad-tool-acc__settings:empty { display: none; }
 
 /* ───────────── 18. LISTA CATEGORIE (sezioni dei campi) ───────────── */
 
@@ -1718,6 +1878,9 @@ button {
   /* La barra mapper va su due righe: il toggle resta raggiungibile. */
   .uad-mapbar { flex-wrap: wrap; }
   .uad-mapbar__txt { flex-basis: 100%; }
+
+  /* La navigazione dei filtri va a capo, non si comprime. */
+  .uad-filters__nav { margin-left: 0; }
 }
 
 /* Molto stretto: toolbar su due righe, chiave e valore impilati. */
@@ -1742,6 +1905,8 @@ button {
   .uad-drawer         { width: 100vw; }
   .uad-credit__tip    { white-space: normal; width: 180px; }
   .uad-maplist__k     { flex-basis: 58px; }
+
+  .uad-tool-acc__body { padding-left: 14px; }
 }
 
 /* ───────────────────── 24. ACCESSIBILITÀ ───────────────────── */
@@ -1778,6 +1943,13 @@ button {
   .uad-group__head[data-default-open='false'] .uad-group__name { color: var(--fg-muted); }
   .uad-cat-item[data-unseen='true'] { opacity: .7; }
   .uad-tab.is-stale { opacity: .8; }
-  /* La mappatura "non mappata" deve restare leggibile. */
   .uad-row__map[data-none='true'] { opacity: .7; }
+  .uad-switch[data-inactive='true'] { opacity: .8; }
+
+  /* Le due evidenziazioni diventano più marcate e restano distinguibili. */
+  .uad-row mark { background: color-mix(in srgb, var(--accent) 45%, transparent); }
+  .uad-row mark[data-filter] {
+    background: color-mix(in srgb, var(--filter) 45%, transparent);
+    text-decoration-thickness: 2px;
+  }
 }

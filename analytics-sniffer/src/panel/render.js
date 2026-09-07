@@ -2,18 +2,18 @@
  * Analytics Sniffer — rendering degli accordion
  * Contesto: pagina di estensione (panel), ES module
  *
- * v5 — mappatura EDDL inline accanto alle chiavi eVar/prop.
+ * v6 — evidenziazione dei match dei filtri, distinta da quella della ricerca.
  *
- * Il pannello fornisce mapperFor(varName), che restituisce tre valori distinti:
- *   null            non applicabile — toggle spento, tab non Adobe, oppure la
- *                   chiave non è una variabile Adobe
- *   stringa vuota   variabile riconosciuta ma ASSENTE dal mapper
- *   stringa         la mappatura
+ * DUE EVIDENZIAZIONI, DUE COLORI
+ * La ricerca evidenzia con <mark> (viola), i filtri con <mark data-filter>
+ * (verde acqua). Con ricerca e filtri attivi insieme devi poter distinguere cosa
+ * ha fatto match per cosa: un solo colore renderebbe l'informazione inutile.
  *
- * Il caso intermedio esiste per una ragione precisa: se una eVar non è nel
- * mapper e non mostrassimo nulla, l'utente penserebbe che il toggle non funzioni
- * su quella riga. Mostrando "non mappata" attenuato, distingue "assente dal
- * mapper" da "mapper spento".
+ * EVIDENZIAZIONE MIRATA
+ * I termini dei filtri arrivano raggruppati per target: filtrando "chiave
+ * contiene item" si illuminano le CHIAVI, non i valori che contengono "item".
+ * Illuminare tutto sarebbe fuorviante — mostrerebbe come causa del match
+ * qualcosa che non lo è.
  *
  * PRINCIPIO: RENDERING PURO
  * Questo modulo NON prende decisioni e NON registra listener. Riceve dati più
@@ -23,13 +23,8 @@
  *
  * SICUREZZA
  * Solo textContent, mai innerHTML. I valori del dataLayer possono contenere HTML
- * arbitrario. L'unica costruzione di nodi è quella dei <mark> per
- * l'evidenziazione, fatta programmaticamente.
- *
- * PERFORMANCE
- * Le righe di un gruppo si costruiscono SEMPRE, anche a gruppo chiuso: aprire un
- * gruppo diventa `hidden = false`, che panel.js applica direttamente al DOM. Il
- * gate pesante resta a livello di evento, il cui corpo è lazy.
+ * arbitrario. L'unica costruzione di nodi è quella dei <mark>, fatta
+ * programmaticamente.
  */
 
 'use strict';
@@ -161,40 +156,89 @@ export function isEmptyValue(v) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   4. Evidenziazione dei match
+   4. Evidenziazione
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /**
- * Scrive `text` in `el` evidenziando le occorrenze di `needle`.
+ * Scrive `text` in `el` evidenziando i termini richiesti.
+ *
  * Costruisce nodi <mark> programmaticamente: nessun innerHTML, nessuna
  * possibilità di injection dai valori del dataLayer.
+ *
+ * @param {Element}  el
+ * @param {string}   text
+ * @param {string}   searchTerm     termine della ricerca (mark viola)
+ * @param {string[]} [filterTerms]  termini dei filtri (mark verde acqua)
  * @returns {number} occorrenze evidenziate
  */
-export function setTextHighlighted(el, text, needle) {
+export function setTextHighlighted(el, text, searchTerm, filterTerms) {
   const s = String(text ?? '');
-  if (!needle) { el.textContent = s; return 0; }
+
+  const terms = [];
+  if (searchTerm) terms.push({ t: String(searchTerm).toLowerCase(), filter: false });
+  if (Array.isArray(filterTerms)) {
+    for (const f of filterTerms) {
+      if (f) terms.push({ t: String(f).toLowerCase(), filter: true });
+    }
+  }
+
+  if (!terms.length) { el.textContent = s; return 0; }
 
   const hay = s.toLowerCase();
-  const nee = String(needle).toLowerCase();
-  if (!nee || hay.indexOf(nee) === -1) { el.textContent = s; return 0; }
+
+  /**
+   * Raccogliamo tutti gli intervalli da evidenziare, poi li fondiamo.
+   * Serve perché ricerca e filtri possono corrispondere a porzioni sovrapposte
+   * della stessa stringa: senza la fusione, i nodi <mark> si annidverebbero e il
+   * testo verrebbe duplicato.
+   */
+  const ranges = [];
+  for (const { t, filter } of terms) {
+    if (!t) continue;
+    let from = 0, guard = 0;
+    // Il guard evita il loop patologico su una ricerca di un solo carattere
+    // dentro un valore molto lungo.
+    while (guard++ < 200) {
+      const at = hay.indexOf(t, from);
+      if (at === -1) break;
+      ranges.push({ start: at, end: at + t.length, filter });
+      from = at + t.length;
+    }
+  }
+
+  if (!ranges.length) { el.textContent = s; return 0; }
+
+  ranges.sort((a, b) => a.start - b.start || b.end - a.end);
+
+  const merged = [];
+  for (const r of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && r.start <= last.end) {
+      last.end = Math.max(last.end, r.end);
+      // Sovrapposizione: la ricerca vince sul filtro. Chi ha digitato qualcosa
+      // in quel momento si aspetta di vedere il proprio colore.
+      if (!r.filter) last.filter = false;
+    } else {
+      merged.push({ ...r });
+    }
+  }
 
   el.textContent = '';
-  let from = 0, count = 0, guard = 0;
+  let cursor = 0;
 
-  // Il guard evita il loop patologico su una ricerca di un solo carattere dentro
-  // un valore molto lungo.
-  while (guard++ < 200) {
-    const at = hay.indexOf(nee, from);
-    if (at === -1) break;
-    if (at > from) el.appendChild(document.createTextNode(s.slice(from, at)));
+  for (const r of merged) {
+    if (r.start > cursor) {
+      el.appendChild(document.createTextNode(s.slice(cursor, r.start)));
+    }
     const mark = document.createElement('mark');
-    mark.textContent = s.slice(at, at + nee.length);
+    mark.textContent = s.slice(r.start, r.end);
+    if (r.filter) mark.dataset.filter = 'true';
     el.appendChild(mark);
-    from = at + nee.length;
-    count++;
+    cursor = r.end;
   }
-  if (from < s.length) el.appendChild(document.createTextNode(s.slice(from)));
-  return count;
+  if (cursor < s.length) el.appendChild(document.createTextNode(s.slice(cursor)));
+
+  return merged.length;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -212,10 +256,17 @@ export function setTextHighlighted(el, text, needle) {
 export function createRenderer(deps) {
   const { toolMeta, state } = deps;
   const crossCheck = deps.crossCheck || (() => null);
-  // Se il pannello non fornisce le funzioni, i default sono innocui: tutte le
-  // categorie aperte e nessuna mappatura.
+  // Se il pannello non fornisce le funzioni, i default sono innocui.
   const categoryOpen = deps.categoryOpen || (() => true);
   const mapperFor = deps.mapperFor || (() => null);
+
+  /** Termini dei filtri per un target, o array vuoto. */
+  function ft(ctx, target) {
+    const t = ctx.filterTerms;
+    if (!t) return null;
+    const list = t[target];
+    return (Array.isArray(list) && list.length) ? list : null;
+  }
 
   /* ─────────────────────── raggruppamento per view ─────────────────────── */
 
@@ -248,7 +299,8 @@ export function createRenderer(deps) {
     setTextHighlighted(
       el.querySelector('[data-url]'),
       shortUrl(first.viewUrl || first.pageUrl),
-      ctx.search
+      ctx.search,
+      ft(ctx, 'url')
     );
 
     el.querySelector('[data-count]').textContent = String(group.events.length);
@@ -334,8 +386,13 @@ export function createRenderer(deps) {
       el.querySelector('[data-devref]').dataset.eventId = ev.__id;
     }
 
-    // Il nome può contenere match di ricerca: sempre riscritto.
-    setTextHighlighted(el.querySelector('[data-name]'), ev.eventName || 'hit', ctx.search);
+    // Il nome può contenere match: sempre riscritto.
+    setTextHighlighted(
+      el.querySelector('[data-name]'),
+      ev.eventName || 'hit',
+      ctx.search,
+      ft(ctx, 'eventName')
+    );
 
     // La visibilità del devref dipende dai settings, quindi cambia nel tempo.
     el.querySelector('[data-devref]').hidden = !ctx.showDevRefs;
@@ -355,7 +412,8 @@ export function createRenderer(deps) {
        * Firma del contenuto: ricostruiamo solo quando cambia qualcosa che lo
        * altera davvero.
        *   showAll            mostra/nasconde i campi vuoti
-       *   search             evidenziazione dei match
+       *   search             evidenziazione della ricerca
+       *   filterVersion      evidenziazione dei filtri
        *   crossCheckVersion  l'indice identity dai cookie è arrivato
        *   catVersion         lo stato iniziale delle categorie è cambiato
        *   mapperVersion      il toggle o la mappa EDDL sono cambiati
@@ -368,6 +426,7 @@ export function createRenderer(deps) {
       const sig = [
         ctx.showAll ? 1 : 0,
         ctx.search || '',
+        ctx.filterVersion || '',
         ctx.crossCheckVersion || 0,
         ctx.catVersion || 0,
         ctx.mapperVersion || 0
@@ -377,9 +436,9 @@ export function createRenderer(deps) {
         buildEventBody(body, ev, ctx);
         body.dataset.built = sig;
       } else {
-        // Il contenuto è già corretto, ma lo stato dei gruppi può essere
-        // cambiato altrove (collapseAll, ricerca, ripristino da storage):
-        // riallineiamo solo gli attributi, senza ricostruire nulla.
+        // Il contenuto è già corretto, ma lo stato dei gruppi può essere cambiato
+        // altrove (collapseAll, ricerca, ripristino da storage): riallineiamo
+        // solo gli attributi, senza ricostruire nulla.
         syncGroupStates(body, ev);
       }
     }
@@ -523,7 +582,14 @@ export function createRenderer(deps) {
     if (!el) return null;
 
     el.dataset.category = cat;
-    el.querySelector('[data-name]').textContent = cat;
+
+    // Il nome della categoria può essere un match dei filtri.
+    setTextHighlighted(
+      el.querySelector('[data-name]'),
+      cat,
+      ctx.search,
+      ft(ctx, 'category')
+    );
     el.querySelector('[data-count]').textContent = String(rows.length);
 
     const head = el.querySelector('.uad-group__head');
@@ -552,10 +618,10 @@ export function createRenderer(deps) {
      * Le righe si costruiscono SEMPRE, anche a gruppo chiuso.
      *
      * Se le costruissimo solo quando aperto, il click sul gruppo dovrebbe
-     * innescare un re-render dell'intero corpo dell'evento per popolarlo — e
-     * quel re-render non avviene, perché la firma del corpo non cambia.
-     * Costruendole sempre, aprire un gruppo è solo `hidden = false`, che
-     * panel.js applica direttamente e istantaneamente.
+     * innescare un re-render dell'intero corpo dell'evento per popolarlo — e quel
+     * re-render non avviene, perché la firma del corpo non cambia. Costruendole
+     * sempre, aprire un gruppo è solo `hidden = false`, che panel.js applica
+     * direttamente e istantaneamente.
      */
     const wrap = el.querySelector('[data-rows]');
     for (const r of rows) {
@@ -573,7 +639,16 @@ export function createRenderer(deps) {
     if (!el) return null;
 
     el.dataset.keyName = r.key;
-    setTextHighlighted(el.querySelector('[data-key]'), r.key, ctx.search);
+
+    // La chiave si illumina se un filtro agisce sulle chiavi. Filtrando "chiave
+    // contiene item", i valori che contengono "item" NON si illuminano: mostrare
+    // come causa del match qualcosa che non lo è sarebbe fuorviante.
+    setTextHighlighted(
+      el.querySelector('[data-key]'),
+      r.key,
+      ctx.search,
+      ft(ctx, 'key')
+    );
 
     /**
      * Mappatura EDDL, tra chiave e valore.
@@ -597,8 +672,7 @@ export function createRenderer(deps) {
           mapEl.dataset.none = 'true';
           mapEl.title = r.key + ' non è presente nel mapper EDDL rilevato';
         } else {
-          // La mappatura è cercabile: evidenziamo anche qui i match.
-          setTextHighlighted(mapEl, mapping, ctx.search);
+          setTextHighlighted(mapEl, mapping, ctx.search, ft(ctx, 'mapping'));
           delete mapEl.dataset.none;
           mapEl.title = r.key + ' → ' + mapping;
         }
@@ -608,7 +682,7 @@ export function createRenderer(deps) {
 
     const text = displayValue(r.value);
     const valEl = el.querySelector('[data-value]');
-    setTextHighlighted(valEl, text, ctx.search);
+    setTextHighlighted(valEl, text, ctx.search, ft(ctx, 'value'));
     // La delega di panel.js legge da qui il valore da copiare: nessuna closure
     // per riga, nessun listener per riga.
     valEl.dataset.copy = text;
@@ -620,6 +694,12 @@ export function createRenderer(deps) {
       info.hidden = false;
       info.title = 'sorgente: ' + r.src;
       info.dataset.src = r.src;
+      // Un filtro su `src` marca la riga: il tooltip non è visibile a colpo
+      // d'occhio, quindi serve un segnale sull'icona stessa.
+      const srcTerms = ft(ctx, 'src');
+      if (srcTerms && srcTerms.some(t => r.src.toLowerCase().includes(t.toLowerCase()))) {
+        info.dataset.filterMatch = 'true';
+      }
     }
 
     // Cross-check identity: il caso ⚠️ è quello che vale — significa utente
@@ -647,7 +727,8 @@ export function createRenderer(deps) {
     setTextHighlighted(
       el.querySelector('[data-name]'),
       p.name || p.SKU || p.item_id || p.id || `prodotto ${index + 1}`,
-      ctx.search
+      ctx.search,
+      ft(ctx, 'value')
     );
 
     const wrap = el.querySelector('[data-rows]');
@@ -768,17 +849,17 @@ export function createRenderer(deps) {
     return { views: groups.length, events: events.length, ids };
   }
 
-  /* ───────────────────────── match per la ricerca ───────────────────────── */
+  /* ─────────────────── raccolta dei match per la navigazione ─────────────── */
 
   /**
-   * Elementi che contengono un match, in ordine di documento. Usati dalle frecce
-   * prev/next della ricerca. I <mark> dentro gruppi chiusi vengono esclusi:
-   * puntare a un match invisibile porterebbe su un nodo vuoto.
+   * Elementi che contengono un match della RICERCA, in ordine di documento.
+   * I <mark> dentro gruppi chiusi vengono esclusi: puntare a un match invisibile
+   * porterebbe su un nodo vuoto.
    */
   function collectMatches(container) {
     const seen = new Set();
     const out = [];
-    for (const m of container.querySelectorAll('mark')) {
+    for (const m of container.querySelectorAll('mark:not([data-filter])')) {
       const gBody = m.closest('.uad-group__body');
       if (gBody && gBody.hidden) continue;
       const host = m.closest('.uad-event') || m.closest('.uad-view');
@@ -789,10 +870,29 @@ export function createRenderer(deps) {
     return out;
   }
 
+  /**
+   * Eventi che soddisfano i filtri, in ordine di documento.
+   *
+   * Non usiamo i <mark data-filter> come per la ricerca: un filtro può essere
+   * soddisfatto senza produrre evidenziazione (operatori negati, isEmpty,
+   * regex). Prendiamo direttamente tutti gli eventi renderizzati, che sono già
+   * quelli filtrati — renderPane riceve la lista filtrata da panel.js.
+   */
+  function collectFilterMatches(container) {
+    return Array.from(container.querySelectorAll('.uad-event[data-event-id]'))
+      .filter(el => {
+        // Un evento dentro una view chiusa non è raggiungibile: lo escludiamo
+        // dalla navigazione, altrimenti il salto porterebbe su un nodo nascosto.
+        const vBody = el.closest('.uad-view__body');
+        return !(vBody && vBody.hidden);
+      });
+  }
+
   return {
     renderTabs,
     renderPane,
     collectMatches,
+    collectFilterMatches,
     sortCategories,
     // esportate per panel.js, cookies.js e i test
     fmtClock, fmtDelta, shortUrl, displayValue, isEmptyValue, setTextHighlighted

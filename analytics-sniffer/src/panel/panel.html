@@ -106,11 +106,17 @@
 
 <!-- ═══════════════════════════════════════════════════════════════════════
      FILTRI AVANZATI
+
      Righe di condizioni; dalla seconda in poi compare il chip AND/OR.
      Valutazione da sinistra a destra, senza precedenza implicita.
+
+     Il contatore e le frecce navigano tra gli EVENTI che soddisfano le
+     condizioni, non tra le singole occorrenze di testo: con un filtro su 200
+     righe, saltare occorrenza per occorrenza sarebbe inutile.
      ═══════════════════════════════════════════════════════════════════════ -->
 <section class="uad-filters" id="filters-panel" hidden aria-label="Filtri avanzati">
   <div class="uad-filters__rows" id="filters-rows"></div>
+
   <div class="uad-filters__actions">
     <button type="button" class="uad-btn uad-btn--ghost" id="btn-filter-add">
       + Aggiungi condizione
@@ -118,6 +124,16 @@
     <button type="button" class="uad-btn uad-btn--ghost" id="btn-filter-reset">
       Azzera filtri
     </button>
+
+    <!-- Navigazione tra i risultati: allineata a destra, compare solo con
+         filtri attivi. -->
+    <div class="uad-filters__nav" id="filter-nav" hidden>
+      <span class="uad-filters__count" id="filter-match-count">0/0</span>
+      <button type="button" class="uad-filters__navbtn" id="filter-prev"
+              title="Risultato precedente (Alt+↑)" aria-label="Precedente">↑</button>
+      <button type="button" class="uad-filters__navbtn" id="filter-next"
+              title="Risultato successivo (Alt+↓)" aria-label="Successivo">↓</button>
+    </div>
   </div>
 </section>
 
@@ -222,7 +238,7 @@
 </main>
 
 <!-- ═══════════════════════════════════════════════════════════════════════
-     TEMPLATE ACCORDION
+     TEMPLATE ACCORDION DEGLI EVENTI
      Macro  = view di pagina (raggruppata per viewId, NON per URL)
      Micro  = singolo evento
      Gruppo = categoria di campi, ordinate COSA → COME, con stato iniziale
@@ -284,7 +300,7 @@
   </div>
 </template>
 
-<!-- La riga key-value ha quattro elementi in sequenza:
+<!-- La riga key-value ha cinque elementi in sequenza:
      chiave · mappatura EDDL (opzionale) · info sorgente · cross-check · valore
      La mappatura si inserisce tra chiave e valore: la colonna dei valori resta
      allineata a destra, quindi scorrere l'elenco non rallenta. -->
@@ -322,7 +338,11 @@
 
   <div class="uad-drawer__body">
 
-    <!-- ── TOOL ─────────────────────────────────────────────────────────── -->
+    <!-- ── TOOL ─────────────────────────────────────────────────────────────
+         Ogni tool è un accordion: nell'header la spunta e il badge di stato,
+         dentro le sue impostazioni specifiche. Le euristiche Adobe vivono nei
+         rispettivi tool, dove ha senso cercarle.
+         ─────────────────────────────────────────────────────────────────── -->
     <section class="uad-section">
       <h3 class="uad-section__title">Tool da monitorare</h3>
 
@@ -330,17 +350,18 @@
         <input type="checkbox" id="opt-autoListener" checked>
         <span class="uad-switch__label">Rilevamento automatico</span>
         <span class="uad-switch__note">
-          Attivo: i tool rilevati sulla pagina compaiono da soli come tab.
-          Disattivo: compaiono solo quelli spuntati qui sotto — utile per
-          nascondere un tool che non ti interessa
+          Attivo: i tool principali sono tutti in ascolto e quelli rilevati sulla
+          pagina compaiono da soli come tab. Toccando una spunta qui sotto passi
+          al controllo manuale, e vale solo la tua selezione
         </span>
       </label>
 
       <p class="uad-section__hint">
-        Solo i tool attivi vengono intercettati: quelli disattivati non
-        agganciano nemmeno un hook. L'ordine di questa lista determina l'ordine
-        delle tab — trascina per riordinare.
+        Solo i tool attivi vengono intercettati: quelli disattivati non agganciano
+        nemmeno un hook. Trascina per riordinare le tab, clicca su un tool per
+        vedere le sue opzioni.
       </p>
+
       <ul class="uad-tool-list" id="settings-tools"></ul>
     </section>
 
@@ -360,12 +381,14 @@
       </div>
     </section>
 
-    <!-- ── FUNZIONI AGGIUNTIVE ──────────────────────────────────────────── -->
-    <section class="uad-section">
+    <!-- ── FUNZIONI GLOBALI ──────────────────────────────────────────────
+         Non appartengono a un tool specifico: valgono su qualsiasi sito.
+         ─────────────────────────────────────────────────────────────────── -->
+    <section class="uad-section" id="settings-global">
       <h3 class="uad-section__title">Funzioni aggiuntive</h3>
       <p class="uad-section__hint">
-        Ogni funzione controlla anche la propria icona in barra: attivarla la
-        mostra, disattivarla la nasconde.
+        Valgono su tutti i tool. Ogni funzione controlla anche la propria icona in
+        barra: attivarla la mostra, disattivarla la nasconde.
       </p>
 
       <label class="uad-switch">
@@ -405,37 +428,6 @@
           Aggiunge un'icona su ogni evento che copia URL e timestamp, per la
           ricerca manuale nel tab Network. Non esiste un'API per saltare
           automaticamente a una riga: è un aiuto, non un'automazione
-        </span>
-      </label>
-    </section>
-
-    <!-- ── ADOBE ────────────────────────────────────────────────────────── -->
-    <section class="uad-section" id="section-adobe">
-      <h3 class="uad-section__title">Adobe — euristiche</h3>
-      <p class="uad-section__hint">
-        Tecniche non documentate da Adobe, utili su implementazioni con Launch.
-        Best-effort: su alcune installazioni non trovano nulla, e un risultato
-        assente non è un bug.
-      </p>
-
-      <label class="uad-switch">
-        <input type="checkbox" id="feat-aggressiveHeuristics" data-feature="aggressiveHeuristics">
-        <span class="uad-switch__label">Polling sui data element</span>
-        <span class="uad-switch__note">
-          Legge l'XDM da <code>_satellite.getVar()</code> quando l'istanza Alloy
-          non è esposta come variabile globale. Serve sulle implementazioni dove
-          il Web SDK è interamente dentro Launch
-        </span>
-      </label>
-
-      <label class="uad-switch">
-        <input type="checkbox" id="feat-adobeMapper" data-feature="adobeMapper">
-        <span class="uad-switch__label">🗺️ Mapper eVar → nome umano (EDDL)</span>
-        <span class="uad-switch__note">
-          Alcune implementazioni tengono in un data element la traduzione
-          <code>eVar1 → page.pageInfo.site_code</code>. Se la trova, compare una
-          barra in cima alla tab Adobe con un interruttore: attivandolo, accanto
-          a ogni eVar e prop vedi la mappatura corrispondente
         </span>
       </label>
     </section>
@@ -494,16 +486,35 @@
   </div>
 </aside>
 
-<template id="tpl-tool-item">
-  <li class="uad-tool-item" draggable="true" data-tool-id>
-    <span class="uad-tool-item__grip" aria-hidden="true"
-          title="Trascina per riordinare le tab">⋮⋮</span>
-    <label class="uad-switch uad-switch--inline">
-      <input type="checkbox" data-tool-toggle>
-      <span class="uad-switch__label" data-tool-label></span>
-    </label>
-    <span class="uad-badge" data-tool-state hidden></span>
+<!-- Accordion di un tool: header cliccabile con spunta e badge, corpo con la
+     descrizione e le impostazioni specifiche del tool. -->
+<template id="tpl-tool-accordion">
+  <li class="uad-tool-acc" draggable="true" data-tool-id>
+    <div class="uad-tool-acc__head" data-tool-head
+         role="button" tabindex="0" aria-expanded="false">
+      <span class="uad-tool-acc__grip" data-tool-grip aria-hidden="true"
+            title="Trascina per riordinare le tab">⋮⋮</span>
+      <input type="checkbox" class="uad-tool-acc__cb" data-tool-toggle
+             aria-label="Attiva questo tool">
+      <span class="uad-tool-acc__label" data-tool-label></span>
+      <span class="uad-badge" data-tool-state hidden></span>
+      <span class="uad-tool-acc__optcount" data-tool-optcount hidden></span>
+      <span class="uad-tool-acc__caret" data-tool-caret aria-hidden="true">▸</span>
+    </div>
+    <div class="uad-tool-acc__body" data-tool-body hidden>
+      <p class="uad-tool-acc__note" data-tool-note></p>
+      <div class="uad-tool-acc__settings" data-tool-settings></div>
+    </div>
   </li>
+</template>
+
+<!-- Una singola impostazione dentro l'accordion di un tool. -->
+<template id="tpl-tool-setting">
+  <label class="uad-switch uad-switch--nested">
+    <input type="checkbox" data-feature>
+    <span class="uad-switch__label" data-setting-label></span>
+    <span class="uad-switch__note" data-setting-note></span>
+  </label>
 </template>
 
 <template id="tpl-cat-item">
