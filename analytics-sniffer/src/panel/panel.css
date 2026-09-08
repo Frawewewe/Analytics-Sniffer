@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    Analytics Sniffer — stile del pannello DevTools
-   v5: accordion dei tool, evidenziazione dei filtri, navigazione tra i match
+   v6: evidenziazione del match sulla RIGA, non sull'intero evento
 
    PRINCIPI
    · Palette a grigi CALDI neutri: il nero puro su schermo affatica e appiattisce
@@ -335,10 +335,11 @@ button {
   background: var(--bg-hover);
   border-radius: 3px;
   flex: 0 0 auto;
+  cursor: help;
 }
 
-/* Ricerca attiva senza risultati: lo diciamo nel contatore, invece di lasciare
-   un campo apparentemente funzionante. */
+/* Ricerca attiva senza risultati: lo diciamo nel contatore, invece di lasciare un
+   campo apparentemente funzionante. */
 .uad-search__count[data-empty='true'] {
   background: color-mix(in srgb, var(--warn) 16%, transparent);
   color: var(--warn);
@@ -511,6 +512,7 @@ button {
   font-weight: 600;
   color: var(--filter);
   flex: 0 0 auto;
+  cursor: help;
 }
 
 /* Filtri attivi senza risultati: lo diciamo nel contatore. */
@@ -659,6 +661,8 @@ button {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 6px 0 40px;
+  /* Lo scroll verso un match non deve incollare la riga al bordo superiore. */
+  scroll-padding-block: 40px;
 }
 
 .uad-empty {
@@ -701,9 +705,9 @@ button {
 
 /* ─────────────────── 9. BARRA MAPPER EDDL ─────────────────── */
 
-/* Compare solo nelle tab Adobe e solo se il mapper è rilevato. Il mapper non è
-   un evento: è un metadato della pagina, quindi vive sopra la cronologia invece
-   di sporcarla come hit. */
+/* Compare solo nelle tab Adobe e solo se il mapper è rilevato. Il mapper non è un
+   evento: è un metadato della pagina, quindi vive sopra la cronologia invece di
+   sporcarla come hit. */
 .uad-mapbar {
   display: flex;
   align-items: center;
@@ -829,7 +833,7 @@ button {
   padding: 7px 9px;
   text-align: left;
   background: var(--bg-sunken);
-  transition: background .12s ease;
+  transition: background .12s ease, box-shadow .15s ease;
 }
 .uad-view__head:hover { background: var(--bg-hover); }
 
@@ -845,8 +849,8 @@ button {
 }
 
 /* La rotazione del caret è guidata da aria-expanded: stato accessibile e stato
-   visivo restano per costruzione sincronizzati, e panel.js non deve ricordarsi
-   di aggiornare due attributi. */
+   visivo restano per costruzione sincronizzati, e panel.js non deve ricordarsi di
+   aggiornare due attributi. */
 [aria-expanded='true'] > .uad-view__caret,
 [aria-expanded='true'] > .uad-event__caret,
 [aria-expanded='true'] > .uad-group__caret {
@@ -890,8 +894,8 @@ button {
 }
 .uad-event:hover { background: var(--bg-hover); }
 
-/* Il bordo colorato appare solo su hover o quando aperto: con 50 eventi in
-   lista, 50 barre colorate sarebbero rumore che nasconde la gerarchia. */
+/* Il bordo colorato appare solo su hover o quando aperto: con 50 eventi in lista,
+   50 barre colorate sarebbero rumore che nasconde la gerarchia. */
 .uad-event:hover,
 .uad-event:has(> [aria-expanded='true']) {
   border-left-color: var(--tool-color);
@@ -904,6 +908,7 @@ button {
   width: 100%;
   padding: 5px 8px;
   text-align: left;
+  transition: box-shadow .15s ease, background .12s ease;
 }
 
 .uad-event__name {
@@ -1019,21 +1024,6 @@ button {
   100% { opacity: 0;  transform: scale(1.015); }
 }
 
-/* Risultato corrente della RICERCA. */
-.uad-event.is-current-match,
-.uad-view.is-current-match {
-  box-shadow: inset 0 0 0 1.5px var(--accent);
-  background: var(--accent-soft);
-}
-
-/* Risultato corrente dei FILTRI: colore distinto, così con ricerca e filtri
-   attivi insieme si capisce quale navigazione ha portato lì. */
-.uad-event.is-filter-match,
-.uad-view.is-filter-match {
-  box-shadow: inset 0 0 0 1.5px var(--filter);
-  background: var(--filter-soft);
-}
-
 /* ─────────────────── 12. ACCORDION — LIVELLO 3: GRUPPO ─────────────────── */
 
 .uad-group { margin: 3px 0; }
@@ -1091,7 +1081,7 @@ button {
   padding: 3px 5px;
   border-radius: 3px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-  transition: background .1s ease;
+  transition: background .1s ease, box-shadow .15s ease;
 }
 .uad-row:last-child { border-bottom: none; }
 .uad-row:hover { background: var(--bg-hover); }
@@ -1186,7 +1176,9 @@ button {
 }
 .uad-row__value:hover { background: var(--accent-soft); }
 
-/* ── Evidenziazione: due colori, due significati ──
+/* ─────────────────── 14. EVIDENZIAZIONE E MATCH CORRENTE ─────────────────── */
+
+/* ── Occorrenze: due colori, due significati ──
    La ricerca in viola, i filtri in verde acqua. Con entrambi attivi devi poter
    distinguere cosa ha fatto match per cosa: un solo colore renderebbe
    l'informazione inutile. */
@@ -1194,7 +1186,8 @@ button {
 .uad-event__name mark,
 .uad-view__url mark,
 .uad-product__name mark,
-.uad-group__name mark {
+.uad-group__name mark,
+.uad-cookie mark {
   background: color-mix(in srgb, var(--accent) 30%, transparent);
   color: inherit;
   border-radius: 2px;
@@ -1205,17 +1198,79 @@ button {
 .uad-event__name mark[data-filter],
 .uad-view__url mark[data-filter],
 .uad-product__name mark[data-filter],
-.uad-group__name mark[data-filter] {
+.uad-group__name mark[data-filter],
+.uad-cookie mark[data-filter] {
   background: color-mix(in srgb, var(--filter) 32%, transparent);
-  /* Il sottolineato distingue anche senza colore: utile a chi ha difficoltà
-     nella distinzione cromatica. */
+  /* Il sottolineato distingue anche senza colore: utile a chi ha difficoltà nella
+     distinzione cromatica. */
   text-decoration: underline;
   text-decoration-color: var(--filter);
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
 
-/* ───────────────────────── 14. PRODOTTI ───────────────────────── */
+/* ── Occorrenza CORRENTE della navigazione ──
+   Dentro una riga con tre occorrenze della stessa stringa, distingue quella su
+   cui il salto ti ha portato. */
+mark.is-current {
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+mark.is-current[data-filter] {
+  background: var(--filter);
+  color: var(--bg);
+  box-shadow: 0 0 0 1px var(--filter);
+}
+
+/* ── Target del match: la RIGA, non l'evento ──
+   È la correzione centrale: prima si illuminava l'intero accordion, cioè 200
+   righe per evidenziarne una. Il target è la riga quando esiste; l'header
+   dell'evento o della view solo quando il match è nel nome o nell'URL, dove non
+   esiste una riga da illuminare. */
+.uad-row.is-current-match,
+.uad-cookie.is-current-match {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+  border-radius: 3px;
+}
+
+.uad-event__head.is-current-match,
+.uad-view__head.is-current-match {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Fallback: se il target risulta essere l'intero evento o la view — succede solo
+   quando il match non è né in una riga né in un header — usiamo un bordo invece
+   di un fondo pieno, che su 200 righe sarebbe eccessivo. */
+.uad-event.is-current-match,
+.uad-view.is-current-match {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+/* ── Equivalenti per i filtri ── */
+.uad-row.is-filter-match,
+.uad-cookie.is-filter-match {
+  background: var(--filter-soft);
+  box-shadow: inset 2px 0 0 var(--filter);
+  border-radius: 3px;
+}
+
+.uad-event__head.is-filter-match,
+.uad-view__head.is-filter-match {
+  background: var(--filter-soft);
+  box-shadow: inset 2px 0 0 var(--filter);
+}
+
+.uad-event.is-filter-match,
+.uad-view.is-filter-match {
+  box-shadow: inset 0 0 0 1.5px var(--filter);
+}
+
+/* ───────────────────────── 15. PRODOTTI ───────────────────────── */
 
 .uad-event__products {
   margin-top: 7px;
@@ -1255,7 +1310,7 @@ button {
 
 .uad-product__rows { padding: 2px 5px; }
 
-/* ───────────────────────── 15. DRAWER ───────────────────────── */
+/* ───────────────────────── 16. DRAWER ───────────────────────── */
 
 .uad-drawer {
   position: fixed;
@@ -1331,7 +1386,7 @@ button {
   flex: 0 0 auto;
 }
 
-/* ───────────────────── 16. SEZIONI E CONTROLLI ───────────────────── */
+/* ───────────────────── 17. SEZIONI E CONTROLLI ───────────────────── */
 
 .uad-section { margin-bottom: 24px; }
 .uad-section:last-of-type { margin-bottom: 12px; }
@@ -1399,8 +1454,8 @@ button {
 /* Permesso mancante: la nota diventa un avviso. */
 .uad-switch[data-permission='missing'] .uad-switch__note { color: var(--warn); }
 
-/* Impostazione di un tool spento: attenuata ma cliccabile, così puoi preparare
-   la configurazione prima di attivare il tool. */
+/* Impostazione di un tool spento: attenuata ma cliccabile, così puoi preparare la
+   configurazione prima di attivare il tool. */
 .uad-switch[data-inactive='true'] { opacity: .55; }
 .uad-switch[data-inactive='true'] .uad-switch__note { color: var(--warn); }
 
@@ -1465,7 +1520,7 @@ button {
   color: var(--fg-muted);
 }
 
-/* ───────────────── 17. ACCORDION DEI TOOL (impostazioni) ───────────────── */
+/* ───────────────── 18. ACCORDION DEI TOOL (impostazioni) ───────────────── */
 
 .uad-tool-list {
   list-style: none;
@@ -1571,7 +1626,7 @@ button {
 }
 .uad-tool-acc__settings:empty { display: none; }
 
-/* ───────────── 18. LISTA CATEGORIE (sezioni dei campi) ───────────── */
+/* ───────────── 19. LISTA CATEGORIE (sezioni dei campi) ───────────── */
 
 .uad-catlist {
   display: flex;
@@ -1622,7 +1677,7 @@ button {
 .uad-cat-item[data-unseen='true'] { opacity: .45; }
 .uad-cat-item[data-unseen='true']:hover { opacity: .75; }
 
-/* ───────────────────── 19. SEGMENTED CONTROL ───────────────────── */
+/* ───────────────────── 20. SEGMENTED CONTROL ───────────────────── */
 
 .uad-segmented {
   display: inline-flex;
@@ -1653,7 +1708,7 @@ button {
 /* L'unico livello distruttivo del clear: colorato solo quando selezionato. */
 .uad-segmented__btn--danger.is-active { color: var(--err); }
 
-/* ───────────────────── 20. COOKIE ───────────────────── */
+/* ───────────────────── 21. COOKIE ───────────────────── */
 
 .uad-cookie-list {
   display: flex;
@@ -1669,6 +1724,7 @@ button {
   border: 1px solid var(--border);
   border-left: 2px solid var(--vendor-color, var(--border-strong));
   border-radius: var(--radius-sm);
+  transition: box-shadow .15s ease, background .12s ease;
 }
 
 .uad-cookie__main {
@@ -1713,7 +1769,7 @@ button {
 .uad-cookie__del:focus-visible { opacity: 1; }
 .uad-cookie__del:hover { color: var(--err); }
 
-/* ───────────────────── 21. CREDIT ───────────────────── */
+/* ───────────────────── 22. CREDIT ───────────────────── */
 
 .uad-credit {
   display: flex;
@@ -1773,10 +1829,10 @@ button {
   transform: translateY(0);
 }
 
-/* ───────────────────── 22. FLOTTANTI ───────────────────── */
+/* ───────────────────── 23. FLOTTANTI ───────────────────── */
 
-/* Badge nuovi match: non scrolla mai da sé, il salto avviene solo su clic.
-   Rubare lo scroll a chi legge un payload rende inutile un debugger. */
+/* Badge nuovi match: non scrolla mai da sé, il salto avviene solo su clic. Rubare
+   lo scroll a chi legge un payload rende inutile un debugger. */
 .uad-newmatch {
   position: fixed;
   bottom: 14px;
@@ -1858,7 +1914,7 @@ button {
 .uad-banner__action:hover { filter: brightness(1.08); }
 .uad-banner .uad-icon-btn { color: var(--warn); }
 
-/* ───────────────────── 23. RESPONSIVE ───────────────────── */
+/* ───────────────────── 24. RESPONSIVE ───────────────────── */
 
 /* Pannello ancorato in basso ma non larghissimo. */
 @media (max-width: 860px) {
@@ -1895,8 +1951,8 @@ button {
 
   .uad-row            { flex-wrap: wrap; }
   .uad-row__key       { max-width: 100%; }
-  /* La mappatura va a capo sotto la chiave e perde il separatore: in verticale
-     un "|" iniziale sarebbe fuori posto. */
+  /* La mappatura va a capo sotto la chiave e perde il separatore: in verticale un
+     "|" iniziale sarebbe fuori posto. */
   .uad-row__map       { flex-basis: 100%; padding-left: 2px; }
   .uad-row__map::before { content: '↳'; margin-right: 4px; }
   .uad-row__value     { flex-basis: 100%; padding-left: 0; }
@@ -1909,7 +1965,7 @@ button {
   .uad-tool-acc__body { padding-left: 14px; }
 }
 
-/* ───────────────────── 24. ACCESSIBILITÀ ───────────────────── */
+/* ───────────────────── 25. ACCESSIBILITÀ ───────────────────── */
 
 /* Chi ha impostato "riduci animazioni" non deve vedere pulse e slide, ma
    l'INFORMAZIONE resta: il pulse animato diventa un bordo statico, così si
@@ -1931,6 +1987,8 @@ button {
     border-radius: 2px;
   }
   .uad-credit__tip { transform: none; }
+  /* Lo scroll istantaneo evita il disorientamento del salto animato. */
+  .uad-panes { scroll-behavior: auto; }
 }
 
 @media (prefers-contrast: more) {
@@ -1952,4 +2010,7 @@ button {
     background: color-mix(in srgb, var(--filter) 45%, transparent);
     text-decoration-thickness: 2px;
   }
+  /* Il target del match guadagna un bordo, non solo un fondo. */
+  .uad-row.is-current-match { box-shadow: inset 3px 0 0 var(--accent), 0 0 0 1px var(--accent); }
+  .uad-row.is-filter-match  { box-shadow: inset 3px 0 0 var(--filter), 0 0 0 1px var(--filter); }
 }

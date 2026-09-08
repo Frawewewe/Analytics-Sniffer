@@ -1,30 +1,32 @@
 /**
- * Universal Analytics Debugger — ricerca
+ * Analytics Sniffer — ricerca
  * Contesto: pagina di estensione (panel), ES module
  *
- * COSA FA
- *   - matching su nomi evento, chiavi, valori, categorie, URL
- *   - contatore N/Totale con frecce prev/next e scroll automatico al salto
- *   - espansione automatica dei soli rami che contengono match
- *   - ripristino esatto dello stato accordion quando la ricerca viene svuotata
- *   - badge "nuovi match" per gli eventi live che soddisfano la query
+ * v2 — la navigazione illumina la RIGA, non l'intero evento.
+ *
+ * COSA ERA SBAGLIATO
+ * render.js restituiva l'evento contenitore invece del <mark>, e applicavamo
+ * is-current-match a quel nodo: 200 righe illuminate per evidenziarne una.
+ *
+ * COME È RISOLTO
+ * collectMatches() restituisce descrittori di singole occorrenze:
+ *   { markId, target, row, event, view, eventId, viewId, category }
+ * Il `target` è la riga quando esiste, l'header dell'evento se il match è nel
+ * nome, l'header della view se è nell'URL. L'evidenziazione va su quello.
+ *
+ * Dopo l'apertura di un ramo il DOM viene ricostruito e i nodi salvati sono
+ * stale: relocateMatch() ritrova l'occorrenza con markId.
  *
  * DUE REGOLE NON NEGOZIABILI
  *
  * 1. NESSUNO SCROLL AUTOMATICO sui nuovi match. Se un evento live entra nei
- *    risultati mentre l'utente sta leggendo, si mostra un badge cliccabile: il
- *    salto avviene solo su richiesta. Rubare lo scroll a chi sta leggendo un
- *    payload e' il modo piu rapido per rendere inutile un debugger.
+ *    risultati mentre l'utente legge, si mostra un badge cliccabile: il salto
+ *    avviene solo su richiesta. Rubare lo scroll a chi sta leggendo un payload è
+ *    il modo più rapido per rendere inutile un debugger.
  *
- * 2. SNAPSHOT PRESO UNA VOLTA SOLA. Il handler dell'input scatta a ogni
- *    carattere: senza il guard di idempotenza in state.js, ogni battuta
- *    salverebbe lo stato GIA espanso e il ripristino finale non riporterebbe
- *    nulla.
- *
- * PERCHE IL MATCHING E' QUI E NON IN render.js
- * render.js evidenzia (setTextHighlighted) ma non decide: la decisione "questo
- * evento entra nei risultati" serve anche ai contatori delle tab e al badge dei
- * nuovi match, cioe fuori dal DOM.
+ * 2. SNAPSHOT PRESO UNA VOLTA SOLA. Il handler dell'input scatta a ogni carattere:
+ *    senza il guard di idempotenza in state.js, ogni battuta salverebbe lo stato
+ *    GIÀ espanso e il ripristino finale non riporterebbe nulla.
  */
 
 'use strict';
@@ -32,44 +34,47 @@
 const DEBOUNCE_MS = 140;
 const SNAPSHOT_KEY = 'search';
 
-/** Oltre questa soglia la ricerca lavora sul solo tool attivo. */
-const CROSS_TOOL_LIMIT = 3000;
+/** Durata dell'evidenziazione del match corrente. */
+const FLASH_MS = 1600;
 
 export function createSearch(deps) {
-  // deps = { state, getEvents, getAllEvents, onChange, displayValue,
-  //          scrollContainer, toast }
+  // deps = { state, getEvents, onChange, displayValue, renderer, container }
 
-  const { state, getEvents, onChange } = deps;
+  const { state, onChange } = deps;
   const displayValue = deps.displayValue || (v => String(v ?? ''));
+  const getEvents = deps.getEvents || (() => []);
 
   const $ = (s) => document.querySelector(s);
 
   const el = {
-    input:   $('#search-input'),
-    count:   $('#search-count'),
-    prev:    $('#search-prev'),
-    next:    $('#search-next'),
-    clear:   $('#search-clear'),
-    newMatch:$('#new-match'),
-    newText: $('#new-match-text')
+    input:    $('#search-input'),
+    count:    $('#search-count'),
+    prev:     $('#search-prev'),
+    next:     $('#search-next'),
+    clear:    $('#search-clear'),
+    newMatch: $('#new-match'),
+    newText:  $('#new-match-text')
   };
 
   const st = {
     query: '',
-    matches: [],        // elementi DOM, aggiornati dal renderer
+    matches: [],        // descrittori da render.collectMatches()
     index: -1,
     newMatches: 0,
     debounce: null,
-    lastFlashed: null
+    flashed: null,      // nodo attualmente evidenziato
+    flashTimer: null
   };
 
   /* ═══════════════════════════════ matching ═══════════════════════════════ */
 
   /**
-   * Un evento entra nei risultati se la query compare in: nome evento, URL,
-   * nome categoria, chiave o valore di un campo, canale, o nome prodotto.
-   * Il canale e' incluso deliberatamente: cercare "hook" mostra tutti gli
-   * eventi senza hit di rete corrispondente, che e' una query diagnostica utile.
+   * Un evento entra nei risultati se la query compare in: nome evento, URL, nome
+   * categoria, chiave o valore di un campo, canale, variabile sorgente, o nome
+   * prodotto.
+   *
+   * Il canale è incluso deliberatamente: cercare "hook" mostra tutti gli eventi
+   * senza hit di rete corrispondente, che è una query diagnostica utile.
    */
   function matches(ev, query) {
     if (!query) return true;
@@ -87,7 +92,7 @@ export function createSearch(deps) {
         if (String(r.key).toLowerCase().includes(q)) return true;
         if (displayValue(r.value).toLowerCase().includes(q)) return true;
         // `src` incluso: cercare il nome di una variabile del dataLayer deve
-        // trovare l'evento che la usa, anche se il nome mappato e' diverso.
+        // trovare l'evento che la usa, anche se il nome mappato è diverso.
         if (r.src && String(r.src).toLowerCase().includes(q)) return true;
       }
     }
@@ -110,8 +115,8 @@ export function createSearch(deps) {
   }
 
   /**
-   * Indica quali categorie di un evento contengono match: serve a espandere
-   * SOLO i gruppi rilevanti, invece di aprire tutto e sommergere l'utente.
+   * Indica quali categorie di un evento contengono match: serve a espandere SOLO
+   * i gruppi rilevanti, invece di aprire tutto e sommergere l'utente.
    */
   function matchingCategories(ev, query) {
     if (!query) return [];
@@ -135,15 +140,16 @@ export function createSearch(deps) {
   /* ═══════════════════════ espansione dei rami ═══════════════════════ */
 
   /**
-   * Apre view, evento e gruppi che contengono match. Chiamata dopo ogni
-   * cambio query, prima del render.
+   * Apre view, evento e gruppi che contengono match. Chiamata dopo ogni cambio
+   * query, prima del render.
+   *
+   * Cap a 200 match: su un sito con migliaia di eventi, aprire tutti i rami
+   * produrrebbe decine di migliaia di nodi. Le frecce prev/next aprono su
+   * richiesta ciò che serve.
    */
   function expandMatchingBranches(events, query) {
     if (!query) return;
 
-    // Cap: su un sito con migliaia di eventi, aprire tutti i rami produrrebbe
-    // decine di migliaia di nodi. Espandiamo i primi 200 match: le frecce
-    // prev/next coprono il resto aprendo su richiesta.
     let expanded = 0;
     for (const ev of events) {
       if (expanded >= 200) break;
@@ -179,7 +185,60 @@ export function createSearch(deps) {
     // Stato "nessun risultato": lo diciamo nel contatore invece di lasciare un
     // campo di ricerca apparentemente funzionante.
     el.count.dataset.empty = String(active && n === 0);
+
+    // Il contatore conta OCCORRENZE, non eventi: se una stringa appare in 5 righe
+    // dello stesso evento sono 5 posti da controllare. Il tooltip lo dichiara,
+    // altrimenti un numero alto sembra un errore.
+    if (active && n) {
+      const events = new Set(st.matches.map(m => m.eventId).filter(Boolean));
+      el.count.title = n + ' occorrenz' + (n === 1 ? 'a' : 'e') +
+                       (events.size ? ' in ' + events.size + ' event' + (events.size === 1 ? 'o' : 'i') : '');
+    } else {
+      el.count.title = '';
+    }
   }
+
+  /* ═══════════════════════ evidenziazione del match ═══════════════════════ */
+
+  function clearFlash() {
+    if (st.flashTimer) { clearTimeout(st.flashTimer); st.flashTimer = null; }
+    if (st.flashed) {
+      st.flashed.classList.remove('is-current-match');
+      st.flashed = null;
+    }
+  }
+
+  /**
+   * Illumina il target del match: la riga, oppure l'header se il match è nel nome
+   * evento o nell'URL.
+   *
+   * Il <mark> corrispondente riceve anche una classe propria, così dentro una riga
+   * con più occorrenze si distingue quella corrente.
+   */
+  function flash(desc) {
+    clearFlash();
+    if (!desc || !desc.target) return;
+
+    desc.target.classList.add('is-current-match');
+    st.flashed = desc.target;
+
+    // Marca l'occorrenza esatta dentro il target.
+    if (desc.markId) {
+      const container = deps.container || document.getElementById('panes');
+      const m = container?.querySelector(`mark[data-mark-id="${desc.markId}"]`);
+      if (m) {
+        document.querySelectorAll('mark.is-current').forEach(x => x.classList.remove('is-current'));
+        m.classList.add('is-current');
+      }
+    }
+
+    st.flashTimer = setTimeout(() => {
+      clearFlash();
+      document.querySelectorAll('mark.is-current').forEach(x => x.classList.remove('is-current'));
+    }, FLASH_MS);
+  }
+
+  /* ═══════════════════════════ navigazione ═══════════════════════════ */
 
   /**
    * Salta al match successivo o precedente.
@@ -189,47 +248,48 @@ export function createSearch(deps) {
     if (!st.matches.length) return;
 
     st.index = (st.index + delta + st.matches.length) % st.matches.length;
-    const target = st.matches[st.index];
-    if (!target) return;
+    const desc = st.matches[st.index];
+    if (!desc) return;
 
-    // Se il match e' dentro un ramo che l'utente ha chiuso a mano, lo
-    // riapriamo: altrimenti il salto porterebbe su un nodo invisibile.
-    const view = target.closest('.uad-view');
-    if (view && view.dataset.viewId) {
-      state.setOpen(state.ids.view(view.dataset.viewId), true);
+    // Se il match è dentro un ramo che l'utente ha chiuso a mano, lo riapriamo:
+    // altrimenti il salto porterebbe su un nodo invisibile.
+    let reopened = false;
+
+    if (desc.viewId) {
+      const id = state.ids.view(desc.viewId);
+      if (!state.isOpen(id)) { state.setOpen(id, true); reopened = true; }
     }
-    if (target.dataset.eventId) {
-      state.setOpen(state.ids.event(target.dataset.eventId), true);
+    if (desc.eventId) {
+      const id = state.ids.event(desc.eventId);
+      if (!state.isOpen(id)) { state.setOpen(id, true); reopened = true; }
+    }
+    if (desc.eventId && desc.category) {
+      const id = state.ids.group(desc.eventId, desc.category);
+      // Il default della categoria non è noto qui: passiamo true perché stiamo
+      // aprendo esplicitamente, non calcolando uno stato.
+      if (!state.isOpen(id, true)) { state.setOpen(id, true, true); reopened = true; }
     }
 
-    // Lo scroll avviene dopo il render conseguente all'espansione.
-    requestAnimationFrame(() => {
-      const live = document.querySelector(
-        target.dataset.eventId
-          ? `[data-event-id="${cssEscape(target.dataset.eventId)}"]`
-          : `[data-view-id="${cssEscape(view?.dataset.viewId || '')}"]`
-      ) || target;
+    /**
+     * Se abbiamo riaperto qualcosa, il DOM viene ricostruito e il nodo salvato è
+     * stale: attendiamo il render e ritroviamo l'occorrenza con markId. Se non
+     * abbiamo riaperto nulla, il nodo è ancora valido e possiamo agire subito.
+     */
+    const act = () => {
+      const container = deps.container || document.getElementById('panes');
+      const live = (reopened && deps.renderer && container)
+        ? (deps.renderer.relocateMatch(container, desc) || desc)
+        : desc;
 
-      live.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      flash(live);
-    });
+      if (live.target && live.target.isConnected) {
+        live.target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        flash(live);
+      }
+      updateCounter();
+    };
 
-    updateCounter();
-  }
-
-  function flash(node) {
-    if (st.lastFlashed) st.lastFlashed.classList.remove('is-current-match');
-    node.classList.add('is-current-match');
-    st.lastFlashed = node;
-    setTimeout(() => {
-      node.classList.remove('is-current-match');
-      if (st.lastFlashed === node) st.lastFlashed = null;
-    }, 1400);
-  }
-
-  function cssEscape(s) {
-    if (window.CSS && typeof CSS.escape === 'function') return CSS.escape(s);
-    return String(s).replace(/["\\]/g, '\\$&');
+    if (reopened) requestAnimationFrame(() => requestAnimationFrame(act));
+    else act();
   }
 
   /* ═════════════════════════ badge nuovi match ═════════════════════════ */
@@ -264,8 +324,8 @@ export function createSearch(deps) {
     clearNewMatches();
     if (!st.matches.length) return;
 
-    // Gli eventi nuovi sono in fondo: puntiamo al primo dei nuovi arrivati,
-    // cosi l'utente li vede in ordine invece di partire dall'ultimo.
+    // Gli eventi nuovi sono in fondo: puntiamo al primo dei nuovi arrivati, così
+    // l'utente li vede in ordine invece di partire dall'ultimo.
     const target = Math.max(0, st.matches.length - n);
     st.index = target - 1;
     goto(1);
@@ -280,6 +340,7 @@ export function createSearch(deps) {
     const wasActive = !!st.query;
     st.query = next;
     st.index = -1;
+    clearFlash();
     clearNewMatches();
 
     if (next && !wasActive) {
@@ -291,20 +352,19 @@ export function createSearch(deps) {
       state.setForceExpand(false, SNAPSHOT_KEY);
     }
 
-    if (next) {
-      const events = getEvents();
-      expandMatchingBranches(events, next);
-    }
+    if (next) expandMatchingBranches(getEvents(), next);
 
     onChange && onChange(immediate === true);
   }
 
   /**
-   * Aggiornata dal renderer dopo ogni render: gli elementi DOM cambiano
-   * identita, quindi la lista dei match va ricostruita.
+   * Aggiornata dal renderer dopo ogni render: gli elementi DOM cambiano identità,
+   * quindi la lista dei match va ricostruita.
+   *
+   * @param {Array} descriptors  da render.collectMatches()
    */
-  function setMatches(nodes) {
-    st.matches = Array.isArray(nodes) ? nodes : [];
+  function setMatches(descriptors) {
+    st.matches = Array.isArray(descriptors) ? descriptors : [];
     if (st.index >= st.matches.length) st.index = st.matches.length - 1;
     updateCounter();
   }
@@ -322,7 +382,7 @@ export function createSearch(deps) {
     el.input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
-        // Invio applica subito la query se il debounce e' ancora pendente,
+        // Invio applica subito la query se il debounce è ancora pendente,
         // altrimenti salta al match successivo.
         clearTimeout(st.debounce);
         const typed = el.input.value.trim();
@@ -398,6 +458,7 @@ export function createSearch(deps) {
     reset() {
       if (el.input) el.input.value = '';
       clearTimeout(st.debounce);
+      clearFlash();
       setQuery('', true);
     },
 
@@ -405,7 +466,8 @@ export function createSearch(deps) {
       query: st.query,
       matches: st.matches.length,
       index: st.index,
-      newMatches: st.newMatches
+      newMatches: st.newMatches,
+      currentTarget: st.matches[st.index]?.target?.className || null
     })
   };
 }

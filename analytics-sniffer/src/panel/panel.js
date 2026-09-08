@@ -264,7 +264,9 @@ const search = createSearch({
   state: uiState,
   getEvents: () => store.byTool.get(ui.activeTool) || [],
   displayValue: renderer.displayValue,
-  onChange: () => scheduleRender()
+  onChange: () => scheduleRender(),
+  renderer,                                          
+  container: document.getElementById('panes')         
 });
 
 const filters = createFilters({
@@ -273,7 +275,9 @@ const filters = createFilters({
   displayValue: renderer.displayValue,
   mapperFor: mapperForFilter,
   onChange: () => scheduleRender(),
-  toast
+  toast,
+  renderer,                                          
+  container: document.getElementById('panes')         
 });
 
 const theme = createTheme({

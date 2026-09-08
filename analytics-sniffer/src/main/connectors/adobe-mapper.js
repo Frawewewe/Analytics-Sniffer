@@ -2,40 +2,40 @@
  * Analytics Sniffer — mapper Adobe: eVar/prop → nome umano (pattern EDDL)
  * World: MAIN | Carica DOPO il core, PRIMA di adobe-legacy.js e adobe-aep.js
  *
- * COS'E — e perche non e' un connettore
- * Alcune implementazioni Adobe Launch adottano un pattern EDDL (Event Driven
- * Data Layer): un data layer con nomi umani e leggibili
+ * v2 — il mapper NON è più un evento.
+ *
+ * Prima emetteva un evento informativo che finiva in mezzo alle hit, sporcando la
+ * cronologia con qualcosa che non è una chiamata di analytics. Ora pubblica la
+ * mappa su un canale dedicato: il pannello la intercetta, non la memorizza tra
+ * gli eventi, e la usa per mostrare una barra in cima alla tab Adobe con un
+ * interruttore. Attivandolo, accanto a ogni eVar e prop compare la mappatura.
+ *
+ * COS'È IL PATTERN EDDL
+ * Alcune implementazioni Adobe Launch adottano un Event Driven Data Layer: un
+ * data layer con nomi umani
  *
  *   { page: { pageInfo: { site_code: "IT", page_type: "PDP" } } }
  *
- * piu un MAPPER separato, cioe un data element che e' una tabella di traduzione
- * da variabile Adobe a percorso del data layer
+ * più un MAPPER separato, cioè un data element che traduce variabile Adobe →
+ * percorso del data layer
  *
- *   { eVar1: "page.pageInfo.site_code",
- *     eVar2: "page.pageInfo.page_type",
- *     prop5: "user.loginStatus" }
+ *   { eVar1: "page.pageInfo.site_code", prop5: "user.loginStatus" }
  *
- * Questo modulo NON produce eventi propri e NON ha una tab: legge il mapper e
- * arricchisce il campo `src` delle righe prodotte dai connettori Adobe. Il
- * risultato visibile e' il tooltip ℹ️ con il nome leggibile, e la variabile
- * diventa cercabile e filtrabile per nome umano.
+ * Senza mapper:  eVar1              IT
+ * Con mapper:    eVar1 | page.pageInfo.site_code    IT
  *
- * Senza mapper:  eVar1  →  IT
- * Con mapper:    eVar1  ℹ️  IT      tooltip: page.pageInfo.site_code
+ * Su un'implementazione con 200 eVar, la differenza è sostanziale.
  *
- * Su un'implementazione con 200 eVar, la differenza e' sostanziale.
+ * LIMITE DICHIARATO
+ * NON è uno standard Adobe: è una convenzione del singolo cliente. Il
+ * rilevamento è euristico — cerchiamo data element il cui valore è un oggetto con
+ * chiavi che matchano /^(eVar|prop)\d+$/ e valori stringa. Se troviamo qualcosa
+ * funziona, altrimenti non compare nulla e nessun danno.
  *
- * ⚠ LIMITE DICHIARATO
- * NON e' uno standard Adobe: e' una convenzione del singolo cliente. Il
- * rilevamento e' euristico — cerchiamo data element il cui valore e' un oggetto
- * con chiavi che matchano /^(eVar|prop)\d+$/ e valori stringa con punti. Se
- * troviamo qualcosa, funziona. Se no, non compare nulla e nessun danno.
- * Per questo la funzione e' opzionale (features.adobeMapper) e la sezione dei
- * Settings che la contiene dichiara di essere best-effort.
- *
- * API esposta ai connettori Adobe:
- *   __UAD.adobeMapper.resolve(varName)  -> string | null
- *   __UAD.adobeMapper.decorate(src, varName) -> string   (src arricchito)
+ * API:
+ *   __UAD.adobeMapper.resolve(varName)        -> string | null
+ *   __UAD.adobeMapper.decorate(src, varName)  -> src arricchito (per il tooltip)
+ *   __UAD.adobeMapper.republish()             -> ripubblica la mappa al pannello
  *   __UAD.adobeMapper.stats()
  */
 (function () {
@@ -49,8 +49,8 @@
      Configurazione
      ════════════════════════════════════════════════════════════════════════ */
 
-  // Nomi di data element piu comuni per il mapper. Provati in ordine; se
-  // nessuno funziona si passa alla scansione di tutti i data element.
+  // Nomi di data element più comuni per il mapper. Provati in ordine; se nessuno
+  // funziona si passa alla scansione filtrata dei data element.
   var CANDIDATE_NAMES = [
     'mapper', 'Mapper', 'varMapper', 'variableMapper', 'evarMapper',
     'eVarMapper', 'analyticsMapper', 'aaMapper', 'adobeMapper',
@@ -58,8 +58,8 @@
     'eddlMapper', 'EDDL Mapper', 'dl_mapper', 'varMap', 'variableMap'
   ];
 
-  // Nomi di data element che contengono il data layer, per risolvere i percorsi
-  // e mostrare anche il VALORE atteso oltre al nome.
+  // Data element che contengono il data layer: serve solo come informazione
+  // aggiuntiva nella barra del pannello.
   var DATALAYER_NAMES = [
     'eddl', 'EDDL', 'dataLayer', 'digitalData', 'dl', 'DL',
     'pageData', 'siteData', 'adobeDataLayer'
@@ -77,12 +77,12 @@
   var state = {
     active: false,
     map: {},              // 'eVar1' -> 'page.pageInfo.site_code'
-    sourceElement: null,  // nome del data element da cui viene il mapper
+    sourceElement: null,  // data element da cui viene il mapper
     dataLayerElement: null,
     entries: 0,
     scans: 0,
     pollTimer: null,
-    announced: false
+    signature: null       // per ripubblicare solo quando la mappa cambia
   };
 
   /** Normalizza il nome variabile: evar1, eVar1, EVAR1 -> eVar1 */
@@ -98,11 +98,9 @@
      ════════════════════════════════════════════════════════════════════════ */
 
   /**
-   * Un oggetto e' un mapper se ha almeno 3 chiavi che sembrano variabili Adobe e
-   * valori che sembrano percorsi (stringhe, tipicamente con punti).
-   *
-   * La soglia di 3 evita i falsi positivi: un oggetto con una sola chiave
-   * "eVar1" potrebbe essere qualsiasi cosa.
+   * Un oggetto è un mapper se ha almeno 3 chiavi che sembrano variabili Adobe e
+   * valori stringa. La soglia di 3 evita i falsi positivi: un oggetto con una
+   * sola chiave "eVar1" potrebbe essere qualsiasi cosa.
    */
   function looksLikeMapper(obj) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
@@ -121,7 +119,6 @@
       if (typeof v === 'string' && v.length > 1 && v.length < 300) pathLike++;
     }
 
-    // Almeno 3 variabili riconosciute, e almeno la meta con un valore stringa.
     return varLike >= 3 && pathLike >= Math.ceil(varLike / 2);
   }
 
@@ -150,8 +147,8 @@
   function satellite() {
     try {
       var s = window._satellite;
-      // Detection PER FORMA: il pre-flight ha trovato _satellite dichiarato come
-      // getter che ritorna undefined da un'altra estensione installata.
+      // Detection PER FORMA: altre estensioni possono dichiarare _satellite come
+      // getter che ritorna undefined.
       if (s && typeof s === 'object' && typeof s.getVar === 'function') return s;
       return null;
     } catch (e) { return null; }
@@ -162,7 +159,7 @@
     catch (e) { return undefined; }
   }
 
-  /** Elenco dei data element configurati, se il container e' ispezionabile. */
+  /** Elenco dei data element configurati, se il container è ispezionabile. */
   function listDataElements(sat) {
     try {
       var c = sat._container;
@@ -174,10 +171,10 @@
   }
 
   /**
-   * Cerca il mapper: prima i nomi candidati, poi tutti i data element del
-   * container. La scansione completa e' l'ultima risorsa perche getVar() puo
-   * eseguire codice custom del cliente, e chiamarlo su 200 data element non e'
-   * gratis.
+   * Cerca il mapper: prima i nomi candidati, poi i data element del container il
+   * cui nome è plausibile. La scansione completa non è gratuita: getVar() può
+   * eseguire codice custom del cliente, e chiamarlo su 200 data element ha un
+   * costo reale.
    */
   function findMapper() {
     var sat = satellite();
@@ -185,20 +182,15 @@
 
     state.scans++;
 
-    // 1. Nomi candidati.
     for (var i = 0; i < CANDIDATE_NAMES.length; i++) {
       var v = readVar(sat, CANDIDATE_NAMES[i]);
       if (looksLikeMapper(v)) return adopt(CANDIDATE_NAMES[i], v);
     }
 
-    // 2. Tutti i data element dichiarati nel container.
     var all = listDataElements(sat);
     for (var j = 0; j < all.length; j++) {
       var name = all[j];
-      // I candidati sono gia stati provati.
-      if (CANDIDATE_NAMES.indexOf(name) !== -1) continue;
-      // Un filtro sul nome riduce le chiamate: un mapper si chiama quasi sempre
-      // in modo riconoscibile.
+      if (CANDIDATE_NAMES.indexOf(name) !== -1) continue;   // già provato
       if (!/map|dict|lookup|trad|conf|schema|var/i.test(name)) continue;
       var val = readVar(sat, name);
       if (looksLikeMapper(val)) return adopt(name, val);
@@ -211,31 +203,28 @@
     var built = buildMap(obj);
     if (!built.n) return false;
 
-    var changed = (state.sourceElement !== elementName) || (built.n !== state.entries);
-
     state.map = built.map;
     state.entries = built.n;
     state.sourceElement = elementName;
 
-    if (changed) {
-      UAD.log('adobe-mapper: mapper trovato in "' + elementName + '" — ' +
-              built.n + ' variabili mappate');
-    }
+    // Ripubblichiamo solo se la mappa è cambiata: Launch può ricaricare i data
+    // element durante la vita della pagina, e un invio a ogni giro sarebbe rumore
+    // inutile sul ponte.
+    var sig = elementName + '|' + built.n;
+    try { sig += '|' + JSON.stringify(built.map).length; } catch (e) {}
 
-    // Un evento informativo una volta sola: l'utente deve sapere che il tooltip
-    // ℹ️ ora mostra i nomi umani, e da dove vengono.
-    if (!state.announced) {
-      state.announced = true;
-      announce(elementName, built);
+    if (sig !== state.signature) {
+      state.signature = sig;
+      UAD.log('adobe-mapper: mapper in "' + elementName + '" — ' + built.n + ' variabili');
+      publish();
     }
     return true;
   }
 
-  /** Cerca anche il data layer, per mostrare il valore atteso nel tooltip. */
+  /** Cerca il data layer: informazione aggiuntiva mostrata nella barra. */
   function findDataLayer() {
     var sat = satellite();
-    if (!sat) return;
-    if (state.dataLayerElement) return;
+    if (!sat || state.dataLayerElement) return;
 
     for (var i = 0; i < DATALAYER_NAMES.length; i++) {
       var v = readVar(sat, DATALAYER_NAMES[i]);
@@ -244,7 +233,7 @@
         try { keys = Object.keys(v); } catch (e) { continue; }
         if (keys.length >= 2) {
           state.dataLayerElement = DATALAYER_NAMES[i];
-          UAD.log('adobe-mapper: data layer trovato in "' + DATALAYER_NAMES[i] + '"');
+          UAD.log('adobe-mapper: data layer in "' + DATALAYER_NAMES[i] + '"');
           return;
         }
       }
@@ -252,68 +241,35 @@
   }
 
   /* ════════════════════════════════════════════════════════════════════════
-     Evento informativo
+     Pubblicazione verso il pannello
      ════════════════════════════════════════════════════════════════════════ */
 
-  function announce(elementName, built) {
-    var cats = { 'Mapper': [], 'Mappature': [] };
-
-    cats['Mapper'].push({
-      key: 'data element', value: elementName, src: '_satellite.getVar("' + elementName + '")'
-    });
-    cats['Mapper'].push({ key: 'variabili mappate', value: built.n, src: null });
-    if (state.dataLayerElement) {
-      cats['Mapper'].push({
-        key: 'data layer', value: state.dataLayerElement,
-        src: '_satellite.getVar("' + state.dataLayerElement + '")'
-      });
+  /**
+   * Invia la mappa sul canale HIT con la chiave __uadMapper.
+   *
+   * NON è un evento: il pannello lo intercetta in ingest() e non lo memorizza tra
+   * le hit. Lo stesso meccanismo usato dal comando "diagnose".
+   *
+   * Il motivo del cambio: un mapper rilevato non è una chiamata di analytics, e
+   * comparire in mezzo alle hit sporcava la cronologia.
+   */
+  function publish() {
+    try {
+      var payload = {
+        __uadMapper: {
+          entries: state.entries,
+          sourceElement: state.sourceElement,
+          dataLayerElement: state.dataLayerElement,
+          map: state.map,
+          ts: Date.now()
+        }
+      };
+      window.dispatchEvent(new CustomEvent(UAD.CH.HIT, {
+        detail: UAD.serialize(payload)
+      }));
+    } catch (e) {
+      UAD.error('adobe-mapper.publish', e);
     }
-    cats['Mapper'].push({
-      key: 'nota',
-      value: 'Il pattern EDDL non è uno standard Adobe: questa mappatura è ' +
-             'un\'euristica sul data element trovato.',
-      src: null
-    });
-
-    // Le prime mappature, come conferma visibile di cosa e' stato letto.
-    var keys = Object.keys(built.map).sort(function (a, b) {
-      var na = parseInt(a.replace(/\D/g, ''), 10);
-      var nb = parseInt(b.replace(/\D/g, ''), 10);
-      var ka = /^prop/.test(a) ? 1 : 0;
-      var kb = /^prop/.test(b) ? 1 : 0;
-      if (ka !== kb) return ka - kb;
-      return na - nb;
-    });
-
-    var lim = Math.min(keys.length, 40);
-    for (var i = 0; i < lim; i++) {
-      cats['Mappature'].push({ key: keys[i], value: built.map[keys[i]], src: null });
-    }
-    if (keys.length > lim) {
-      cats['Mappature'].push({
-        key: '…', value: '+' + (keys.length - lim) + ' altre mappature', src: null
-      });
-    }
-
-    // Emesso sul connettore Adobe attivo, cosi compare nella sua tab invece di
-    // creare una tab per qualcosa che non e' un tool.
-    var target = UAD.isEnabled('adobe-aep') ? 'adobe-aep'
-               : UAD.isEnabled('adobe-legacy') ? 'adobe-legacy'
-               : null;
-    if (!target) return;
-
-    UAD.emit(target, {
-      name: 'mapper EDDL rilevato (' + built.n + ' variabili)',
-      categorizedFields: cats,
-      source: 'polling',
-      status: 'ok',
-      timestamp: Date.now(),
-      meta: {
-        adobeMapper: true,
-        sourceElement: elementName,
-        entries: built.n
-      }
-    });
   }
 
   /* ════════════════════════════════════════════════════════════════════════
@@ -328,18 +284,14 @@
       UAD.safe('adobe-mapper.poll', function () {
         if (!UAD.hasFeature('adobeMapper')) { stopPolling(); return; }
 
-        // Il mapper puo cambiare durante la vita della pagina (Launch ricarica i
-        // data element su alcuni eventi): continuiamo a controllare anche dopo
-        // averlo trovato, ma senza riemettere l'evento informativo.
         findDataLayer();
         var found = findMapper();
 
-        // Trovato e stabile, oppure tempo scaduto: smettiamo.
         if (Date.now() - t0 > POLL_MAX_MS) {
           stopPolling();
           if (!found && !state.entries) {
-            UAD.log('adobe-mapper: nessun mapper trovato dopo ' +
-                    (POLL_MAX_MS / 1000) + 's (normale su implementazioni che non usano EDDL)');
+            UAD.log('adobe-mapper: nessun mapper trovato dopo ' + (POLL_MAX_MS / 1000) +
+                    's (normale su implementazioni che non usano il pattern EDDL)');
           }
         }
       })();
@@ -358,7 +310,7 @@
 
   /**
    * Percorso umano di una variabile, o null se non mappata.
-   * @param {string} varName  'eVar1' | 'evar1' | 'prop5' | ...
+   * @param {string} varName  'eVar1' | 'evar1' | 'prop5'
    */
   function resolve(varName) {
     if (!state.entries) return null;
@@ -369,16 +321,11 @@
 
   /**
    * Arricchisce il campo `src` di una riga con il nome umano.
-   * Chiamata dai connettori Adobe per ogni eVar/prop.
    *
-   * @param {string} currentSrc  src attuale, es. "s.eVar1"
-   * @param {string} varName     nome della variabile
-   * @returns {string} src arricchito, o quello originale se non mappata
-   *
-   * Esempio: decorate('s.eVar1', 'eVar1')
-   *          -> 'page.pageInfo.site_code  ·  s.eVar1'
-   * Il nome umano viene PRIMA: e' l'informazione che serve, e nel tooltip si
-   * legge da sinistra.
+   * Resta disponibile per i connettori che vogliono il nome anche nel tooltip
+   * della sorgente, ma NON è il canale principale: la visualizzazione inline
+   * accanto alla chiave è gestita dal pannello, che riceve la mappa completa e
+   * può accenderla e spegnerla con un interruttore.
    */
   function decorate(currentSrc, varName) {
     var human = resolve(varName);
@@ -387,7 +334,6 @@
     return human + '  ·  ' + currentSrc;
   }
 
-  /** Mappa completa, per la diagnostica. */
   function getMap() {
     var out = {};
     for (var k in state.map) {
@@ -404,7 +350,7 @@
     if (state.active) return;
     state.active = true;
 
-    // _satellite puo comparire dopo di noi: il watcher lo intercetta con
+    // _satellite può comparire dopo di noi: il watcher lo intercetta con
     // defineProperty, senza polling sulla global.
     UAD.watchGlobal('_satellite', function () {
       UAD.safe('adobe-mapper.onSatellite', function () {
@@ -428,7 +374,11 @@
     state.map = {};
     state.entries = 0;
     state.sourceElement = null;
-    state.announced = false;
+    state.signature = null;
+
+    // Pubblichiamo la mappa vuota: il pannello nasconde la barra invece di
+    // mostrare un mapper che non è più attivo.
+    publish();
     UAD.log('adobe-mapper disattivato');
   }
 
@@ -441,19 +391,23 @@
       var want = UAD.hasFeature('adobeMapper');
       if (want && !state.active) activate();
       else if (!want && state.active) deactivate();
+      // Il pannello può essere stato riaperto: ripubblichiamo perché ha perso la
+      // mappa ricevuta prima.
+      else if (want && state.entries) publish();
     })();
   }, false);
 
   /* ════════════════════════════════════════════════════════════════════════
      Export
-     Non e' un connettore: non chiamiamo UAD.register(). Non ha tab, non ha
-     detect(), non produce eventi propri (tranne quello informativo iniziale).
+     Non è un connettore: nessuna UAD.register(). Non ha tab, non ha detect(),
+     non produce eventi.
      ════════════════════════════════════════════════════════════════════════ */
 
   UAD.adobeMapper = {
     resolve: resolve,
     decorate: decorate,
     getMap: getMap,
+    republish: publish,
     get available() { return state.entries > 0; },
     stats: function () {
       return {
